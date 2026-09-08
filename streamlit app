@@ -1,0 +1,12 @@
+# Massachusetts Peak Electricity Demand Forecasting
+
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://massachusetts-peak-electricity-demand-forecasting-jlapsnfvdheu.streamlit.app/)
+
+A Streamlit app for forecasting peak electricity demand in Massachusetts using [brief model/approach].
+
+## Live Demo
+👉 [Click here to view the live app](https://massachusetts-peak-electricity-demand-forecasting-jlapsnfvdheu.streamlit.app/)
+
+## Preview
+![App Screenshot](assets/screenshot.png)
+&lt;!-- Or a GIF: ![Demo](assets/demo.gif) --&gt;
