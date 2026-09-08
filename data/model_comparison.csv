@@ -1,0 +1,5 @@
+,MAE,RMSE,MAPE
+Baseline (seasonal avg),1215.5,1466.4,10.45
+XGBoost,151.2,196.0,1.25
+LightGBM,153.5,199.2,1.27
+Ensemble,149.1,193.7,1.23
