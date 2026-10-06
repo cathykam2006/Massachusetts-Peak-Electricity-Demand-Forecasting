@@ -10,6 +10,8 @@ Using weather, load, renewable generation, and consumer behavior data to forecas
 
 Electricity grid operators must balance supply and demand in real time, every hour of every day. Under-forecasting demand risks blackouts and emergency power purchases; over-forecasting wastes generation capacity and drives up costs for ratepayers. This project builds and compares four forecasting approaches — from a naive seasonal baseline to a gradient-boosted ensemble — to predict hourly electricity demand in the ISO-NE region, and then uses model explainability (SHAP) to answer a more specific question: **what conditions are most associated with extreme peak demand, and does that answer change by season?**
 
+🔗 **Live app:** [Open the interactive app](https://massachusetts-peak-electricity-demand-forecasting-jlapsnfvdheu.streamlit.app/)
+
 ## Key Findings
 
 - An **ensemble of XGBoost and LightGBM** achieved the best forecasting accuracy (MAPE: 1.27%), roughly an 8x improvement over a naive seasonal-average baseline (MAPE: 10.47%).
