@@ -1,101 +1,113 @@
-# Predicting Peak Electricity Demand in Massachusetts
+# Day-Ahead Electricity Demand Forecasting for New England
 
-Using weather, load, renewable generation, and consumer behavior data to forecast hourly electricity demand for ISO New England, with a focus on identifying the conditions that drive extreme peak demand events.
+An operational forecast of tomorrow's hourly electricity demand on the ISO New England grid, built only from free public data. Every morning it predicts all 24 hours of the next day, with an 80% prediction range, and scores itself against ISO-NE's own day-ahead forecast.
 
-<p align="center">
-  <img src="https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcS1qbmBJ6c9Wma3i2UhiRgKJda6EqOqR0HhGvHgHtlM0N7SlizAsOUzRUg&s=10" alt="Massachusetts Grid" width="500">
-</p>
+🔗 **Live app:** [Open the interactive app](https://massachusetts-peak-electricity-demand-forecasting-jlapsnfvdheu.streamlit.app/)
 
-## Overview
+## Why it matters
 
-Electricity grid operators must balance supply and demand in real time, every hour of every day. Under-forecasting demand risks blackouts and emergency power purchases; over-forecasting wastes generation capacity and drives up costs for ratepayers. This project builds and compares four forecasting approaches — from a naive seasonal baseline to a gradient-boosted ensemble — to predict hourly electricity demand in the ISO-NE region, and then uses model explainability (SHAP) to answer a more specific question: **what conditions are most associated with extreme peak demand, and does that answer change by season?**
+Grid operators commit power plants a day in advance. Under-forecasting demand risks emergency purchases and reliability problems; over-forecasting wastes capacity and raises costs for ratepayers. Peak hours matter most, because they drive capacity costs that end up on customers' bills.
 
-## Key Findings
+## Key results
 
-- An **ensemble of XGBoost and LightGBM** achieved the best forecasting accuracy (MAPE: 1.27%), roughly an 8x improvement over a naive seasonal-average baseline (MAPE: 10.47%).
-- **SARIMAX**, a classical statistical time-series model, underperformed even the naive baseline at both a 90-day and a 24-hour forecast horizon — a known limitation of ARIMA-family models at scale without access to recent ground-truth values.
-- **Extreme peak demand** clusters around 7 PM on weekdays in both winter and summer, but for opposite physical reasons: winter peaks are driven by heating load on cold evenings, while summer peaks are driven by cooling load on hot evenings. Roughly 95% of extreme-demand hours in both seasons occur on weekdays.
+A rolling-origin backtest replays October 2025 to October 2026 exactly as the forecast would have run live: retrain every 28 days, forecast each next day out of sample, step forward.
 
-## Data Sources
+| Forecast | Hourly MAPE | MAE (MW) | Daily peak MAPE | Peak hour within ±1h |
+|---|---|---|---|---|
+| Naive: same hour last week | 10.99% | 1,476 | 8.32% | 91.0% |
+| **This model** (calibrated LightGBM + XGBoost ensemble) | **3.79%** | **499** | **2.56%** | **95.6%** |
+| ISO-NE's published day-ahead forecast | 3.04% | 374 | 1.25% | 97.5% |
 
-This project uses three real, publicly available data sources:
+- **65% less error than the naive baseline**, and within 0.75 percentage points of the grid operator, which uses far richer proprietary data.
+- **Calibrated uncertainty:** the 80% prediction range contained actual demand in 79.1% of hours.
+- **Unbiased:** average error of −2 MW, versus about −290 MW for ISO-NE's forecast over the same period.
+- **Solar matters:** adding sunshine forecasts cut overall error from 4.08% to 3.79%, and spring error from 4.76% to 4.08%. Rooftop solar isn't metered by ISO-NE, so sunny middays show up as lower demand.
 
-| Data | Source | Frequency |
+Accuracy by season (calibrated ensemble):
+
+| Season | Hourly MAPE | Daily peak MAPE |
 |---|---|---|
-| Electricity demand (ISO-NE) | [EIA Hourly Electric Grid Monitor API](https://www.eia.gov/electricity/gridmonitor/) ([docs](https://www.eia.gov/opendata/)) | Hourly |
-| Weather (Boston, MA) | [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api) | Hourly |
-| Renewable generation (solar/wind, ISO-NE) | [EIA Electricity Data API](https://www.eia.gov/opendata/browser/electricity/rto/fuel-type-data) | Hourly |
+| Winter | 3.39% | 2.30% |
+| Spring | 4.08% | 1.81% |
+| Summer | 4.18% | 3.93% |
+| Fall | 3.52% | 2.17% |
 
-Consumer behavior is represented through calendar-based proxy features (hour of day, day of week, weekend/holiday flags), since individual smart-meter-level data is not publicly available.
+Summer peaks remain the hardest to predict, since heat-wave demand depends on humidity and multi-day heat buildup.
 
-> **Note:** An earlier version of this project used a Kaggle dataset that was found, through a structured validation process, to be synthetically generated with no real temporal or spatial structure. It was replaced with the real data sources above. This investigation is documented in the notebook itself as part of the project's data-quality process.
+## How it works
 
-## Methodology
+**Forecast setup.** At about 10 AM ET each day, the model forecasts all 24 hours of the next day. It uses only information that exists at that moment:
 
-1. **Data sourcing & validation** — pulling and verifying real hourly demand, weather, and generation data via free public APIs.
-2. **Feature engineering** — lag features (1h, 24h, 168h), rolling averages, heating/cooling degree days, and calendar/behavioral flags.
-3. **Model comparison** — baseline (seasonal historical average) → SARIMAX → XGBoost / LightGBM → ensemble.
-4. **Explainability** — SHAP analysis on the top 5% highest-demand hours, run separately on winter and summer test windows to characterize seasonal drivers of extreme demand.
+- calendar facts: hour, weekday, holidays, season
+- the **weather forecast** for tomorrow (temperature, dew point, humidity, wind, cloud cover and sunshine), averaged across eight New England cities weighted by population
+- demand through two days ago, plus the current morning's demand so far
 
-## Results
+**Data sources.**
 
-| Model | MAE (MW) | RMSE (MW) | MAPE |
-|---|---|---|---|
-| Baseline (seasonal avg) | 1217.0 | 1468.5 | 10.47% |
-| SARIMAX (90-day horizon) | 5035.6 | 5381.4 | 43.61% |
-| SARIMAX (24-hour horizon) | 1977.3 | 2167.4 | 18.35% |
-| XGBoost | 159.2 | 207.3 | 1.31% |
-| LightGBM | 157.1 | 204.0 | 1.29% |
-| **Ensemble** | **155.0** | **201.4** | **1.27%** |
+| Data | Source | Notes |
+|---|---|---|
+| Hourly ISO-NE demand | [EIA-930 API](https://www.eia.gov/opendata/) (series `D`) | Target variable |
+| ISO-NE day-ahead forecast | [EIA-930 API](https://www.eia.gov/opendata/) (series `DF`) | Benchmark |
+| Archived weather forecasts | [Open-Meteo Previous Runs API](https://open-meteo.com/en/docs/previous-runs-api) | What the weather models predicted the day before (2024 onward) |
+| Live weather forecasts | [Open-Meteo Forecast API](https://open-meteo.com/en/docs) | For the daily forecast |
 
-## Repository Structure
+Training on archived *forecasts* rather than observed weather is deliberate: the model learns with the same weather-forecast error it faces in live use.
+
+**Models.** The point forecast averages LightGBM and XGBoost. LightGBM quantile models provide the 80% range.
+
+**Calibration.** Using only days already observed at forecast time, the forecast is corrected for recent bias, and the range is resized with conformalized quantile regression so that it really covers 80% of hours.
+
+**Explainability.** SHAP values show which inputs drive the forecast, how demand responds to temperature, and when extreme peaks occur.
+
+**Operations.** A GitHub Action issues tomorrow's forecast every morning and commits it before the actuals exist, building a live, publicly scored track record. A second Action retrains the models monthly.
+
+## Version 1 and what changed
+
+The first version of this project reported a 1.27% MAPE. A review found that it used information that would not exist at forecast time: the previous hour's actual demand, a 24-hour rolling average that included the hour being predicted, and observed (not forecast) weather and renewable generation. That made it a one-hour-ahead nowcast rather than a forecast.
+
+Version 2 rebuilds the project as a true day-ahead forecast. The honest error is higher (3.79%), but it reflects what the model can actually do, and it allows a fair comparison with ISO-NE. The original app is kept as `app_v1.py`, along with the version 1 notebooks.
+
+## Repository structure
 
 ```
-.
-├── notebook.ipynb          # Main analysis notebook (data pull, EDA, modeling, SHAP)
-├── README.md                # This file
-└── isone_full_dataset.csv   # Cached combined dataset (demand + weather + generation + calendar features)
+forecast/
+  config.py          settings: forecast timing, weather locations, backtest options
+  data.py            EIA and Open-Meteo data pulls and cleaning
+  features.py        day-ahead features with no look-ahead
+  models.py          LightGBM/XGBoost ensemble and quantile models
+  calibration.py     online bias correction and conformal intervals
+  evaluate.py        rolling-origin backtest and metrics
+train_dayahead.py    build dataset, backtest, train final models
+forecast_tomorrow.py issue tomorrow's forecast (run daily by GitHub Actions)
+app.py               Streamlit app
+app_v1.py            original version 1 app, kept for reference
+data/dayahead/       backtest results, metrics, live forecast log
+models/dayahead/     trained models
+.github/workflows/   daily forecast and monthly retrain
+*.ipynb              version 1 notebooks (data cleaning, EDA, modeling)
+train_and_save.py    version 1 training script
+graphs/, *.pdf       version 1 charts and presentation decks
 ```
 
-*(Adjust the above to match your actual file/folder names.)*
+## Running it yourself
 
-## Requirements
-
-```
-pandas
-numpy
-matplotlib
-seaborn
-requests
-xgboost
-lightgbm
-statsmodels
-shap
-holidays
-scikit-learn
-```
-
-Install with:
+You need a free EIA API key from [eia.gov/opendata/register.php](https://www.eia.gov/opendata/register.php). Open-Meteo needs no key.
 
 ```bash
-pip install pandas numpy matplotlib seaborn requests xgboost lightgbm statsmodels shap holidays scikit-learn
+pip install -r requirements.txt
+export EIA_API_KEY="your_key"
+python train_dayahead.py        # pull data, backtest, train (about 20 minutes)
+python forecast_tomorrow.py     # issue tomorrow's forecast
+streamlit run app.py            # view the app locally
 ```
 
-## Getting an API Key
-
-This project pulls live data from the EIA API, which requires a free API key:
-
-1. Register at [eia.gov/opendata/register.php](https://www.eia.gov/opendata/register.php) (instant, email only).
-2. Paste your key into the `API_KEY` variable near the top of the notebook.
-
-Open-Meteo's historical weather API requires no key.
+To run the daily forecast automatically on GitHub, add `EIA_API_KEY` as a repository secret (Settings → Secrets and variables → Actions) and allow Actions to write to the repository (Settings → Actions → General → Workflow permissions → Read and write).
 
 ## Limitations
 
-- Weather data is sourced for Boston specifically, used as a proxy for the broader Massachusetts/ISO-NE service area.
-- SARIMAX tuning was constrained by compute time; a more exhaustively tuned model may perform better than reported here.
-- The extreme-peak explainability analysis covers two 2-month seasonal windows (fall/winter and summer) rather than a full year of rolling analysis.
+- Archived day-ahead weather forecasts are available only from January 2024, which limits the training history to about two and three-quarter years.
+- Weather is averaged over eight cities. ISO-NE uses many more stations plus its own forecasts of behind-the-meter solar.
+- Demand data comes from EIA-930, which can be revised after first publication.
+- ISO-NE's forecast may be defined slightly differently from EIA's demand series, which could explain part of its average bias.
 
-## License
-
-*(Add your preferred license here, e.g., MIT.)*
+Data: U.S. Energy Information Administration; weather data by [Open-Meteo.com](https://open-meteo.com/) (CC BY 4.0).
