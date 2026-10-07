@@ -1,0 +1,33 @@
+# Issues tomorrow's ISO-NE demand forecast every morning and commits it, so the
+# Streamlit app (which redeploys on push) always shows the latest forecast.
+name: Daily day-ahead forecast
+
+on:
+  schedule:
+    - cron: "30 14 * * *"   # 14:30 UTC = 10:30 AM EDT / 9:30 AM EST
+  workflow_dispatch:         # lets you run it manually from the Actions tab
+
+permissions:
+  contents: write
+
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Issue forecast
+        env:
+          EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
+        run: python forecast_tomorrow.py
+      - name: Commit forecast
+        run: |
+          git config user.name "forecast-bot"
+          git config user.email "actions@github.com"
+          git add data/dayahead/latest_forecast.csv data/dayahead/forecast_log.csv
+          git diff --cached --quiet || git commit -m "Day-ahead forecast $(date -u +%F)"
+          git push

@@ -18,7 +18,40 @@ Electricity grid operators must balance supply and demand in real time, every ho
 - **SARIMAX**, a classical statistical time-series model, underperformed even the naive baseline at both a 90-day and a 24-hour forecast horizon — a known limitation of ARIMA-family models at scale without access to recent ground-truth values.
 - **Extreme peak demand** clusters around 7 PM on weekdays in both winter and summer, but for opposite physical reasons: winter peaks are driven by heating load on cold evenings, while summer peaks are driven by cooling load on hot evenings. Roughly 95% of extreme-demand hours in both seasons occur on weekdays.
 
-## Data Sources
+## Version 2: Operational Day-Ahead Forecast
+
+Version 1 used features that would not exist at forecast time: the previous hour's actual demand, a 24-hour rolling mean that included the target hour itself, and observed (not forecast) weather and generation. That made it a one-hour-ahead nowcast, which is why its MAPE was 1.27%. Version 2 rebuilds the project as a forecast an operator could actually issue.
+
+**Forecast setup.** Each morning at about 10 AM ET, the model forecasts all 24 hours of the next day. It uses only information available at that moment: calendar facts, the *weather forecast* for tomorrow, demand through two days ago, and the early-morning demand already observed today.
+
+**Inputs.**
+- ISO-NE hourly demand from EIA-930.
+- Archived day-ahead weather forecasts from the Open-Meteo Previous Runs API (2024 onward). These record what the weather models predicted the day before, not what actually happened, so the model is trained and tested with realistic weather-forecast error.
+- Population-weighted weather across eight New England load centers, rather than a single Boston point.
+
+**Evaluation.**
+- A rolling-origin backtest over the most recent year: refit every 28 days, forecast each day out-of-sample, and step forward.
+- Benchmarks are a seasonal-naive forecast and **ISO-NE's own published day-ahead forecast** (EIA series `DF`).
+- Metrics are hourly MAPE, daily-peak MAPE, peak-hour accuracy, and prediction-interval coverage.
+
+**Calibration.** An online step corrects each forecast for the model's recent bias, which comes from load drifting down as behind-the-meter solar grows. It also calibrates an 80% prediction interval using conformalized quantile regression. Both use only errors from days fully observed at forecast time.
+
+**Operations.** A GitHub Action issues tomorrow's forecast every morning and commits it to `data/dayahead/`. Every forecast is logged *before* its actuals exist, building a live out-of-sample track record. A second action retrains monthly.
+
+```
+forecast/            config, data pulls, features, models, calibration, evaluation
+train_dayahead.py    build dataset -> backtest -> train final models
+forecast_tomorrow.py issue tomorrow's forecast (run daily by GitHub Actions)
+```
+
+```bash
+export EIA_API_KEY="your_key"
+python train_dayahead.py            # backtest + final models (2024 -> yesterday)
+python train_dayahead.py --weather archive --start 2021-01-01   # perfect-weather upper bound
+python forecast_tomorrow.py         # tomorrow's forecast
+```
+
+## Data Sources (Version 1)
 
 This project uses three real, publicly available data sources:
 

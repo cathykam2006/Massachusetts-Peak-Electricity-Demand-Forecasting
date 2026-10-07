@@ -1,0 +1,33 @@
+# Refits the models on the latest data on the 1st of each month. Skips the
+# full backtest to keep it fast; rerun train_dayahead.py locally for fresh metrics.
+name: Monthly retrain
+
+on:
+  schedule:
+    - cron: "0 12 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Retrain
+        env:
+          EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
+        run: python train_dayahead.py --skip-backtest
+      - name: Commit models
+        run: |
+          git config user.name "forecast-bot"
+          git config user.email "actions@github.com"
+          git add models/dayahead/ data/dayahead/
+          git diff --cached --quiet || git commit -m "Monthly retrain $(date -u +%F)"
+          git push
