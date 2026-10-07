@@ -1,7 +1,7 @@
 ,MAE (MW),RMSE (MW),MAPE (%),Bias (MW),Daily peak MAPE (%),Peak hour ±1h (%)
 Seasonal naive (same hour last week),1476.14,2025.02,10.99,-6.9,8.32,90.96
-LightGBM,534.18,727.47,4.1,0.89,2.71,95.62
-XGBoost,536.52,735.2,4.13,-16.75,2.66,95.89
-Ensemble (raw),529.68,724.39,4.07,-7.93,2.66,95.62
-Ensemble + calibration (ours),530.01,723.82,4.08,-2.85,2.66,95.62
+LightGBM,501.73,691.3,3.8,-1.57,2.62,95.07
+XGBoost,505.59,701.22,3.85,-4.98,2.6,95.62
+Ensemble (raw),498.41,689.71,3.79,-3.27,2.58,95.62
+Ensemble + calibration (ours),499.29,689.39,3.79,-2.21,2.56,95.62
 ISO-NE day-ahead forecast,373.91,523.26,3.04,-293.42,1.25,97.53

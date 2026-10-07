@@ -40,6 +40,10 @@ WEATHER_VARS = {
     "relative_humidity_2m": "rh_pct",
     "wind_speed_10m": "wind_kmh",
     "cloud_cover": "cloud_pct",
+    # Global horizontal irradiance. Behind-the-meter rooftop solar isn't metered
+    # by ISO-NE, so it shows up as LOWER demand on sunny middays; the solar
+    # forecast lets the model anticipate that dip.
+    "shortwave_radiation": "ghi_wm2",
 }
 
 # The Previous Runs API stores what each weather model predicted N days before

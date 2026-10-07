@@ -1,5 +1,5 @@
 {
-  "interval_coverage_pct": 79.2,
+  "interval_coverage_pct": 79.1,
   "backtest_start": "2025-10-07",
   "backtest_end": "2026-10-06",
   "weather_mode": "forecast"

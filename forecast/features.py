@@ -78,6 +78,13 @@ def build_features(hourly):
         df["cdd_d"] = (df["temp_mean_d"] - C.DEGREE_BASE_C).clip(lower=0)
         df["hdd_d"] = (C.DEGREE_BASE_C - df["temp_mean_d"]).clip(lower=0)
 
+    if "ghi_wm2" in have_wx:
+        # Daily solar total: separates sunny days (deep midday dip from rooftop
+        # solar) from overcast ones, independent of the hour.
+        g = df["ghi_wm2"]
+        df["ghi_sum_d"] = date.map(g.groupby(date).sum()).values
+        df["ghi_x_daylight"] = g * df["hour"].between(9, 16)
+
     # --- Demand history (only what's observed by the forecast origin) ----
     y = df[C.TARGET]
     # Positional shifts are exact time shifts because the grid is complete.
@@ -113,7 +120,7 @@ def feature_columns(df):
         "is_weekend", "is_holiday", "is_holiday_season",
         *WEATHER_COLS,
         "hdh", "cdh", "temp_max_d", "temp_min_d", "temp_mean_d",
-        "temp_mean_3d_wtd", "cdd_d", "hdd_d",
+        "temp_mean_3d_wtd", "cdd_d", "hdd_d", "ghi_sum_d", "ghi_x_daylight",
         "load_same_hour_d2", "load_same_hour_d7", "load_same_hour_d14",
         "load_peak_d2", "load_mean_d2", "load_peak_d7",
         "load_d1_morning_mean", "load_d1_last_obs", "load_d1_morning_vs_lastweek",
