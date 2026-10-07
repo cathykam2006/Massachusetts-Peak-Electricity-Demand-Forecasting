@@ -88,10 +88,8 @@ def summarize(bt):
     """Compare every forecast on the SAME hours (fair comparison)."""
     models = {
         "Seasonal naive (same hour last week)": "pred_naive_week",
-        "LightGBM": "pred_lgb",
-        "XGBoost": "pred_xgb",
-        "Ensemble (raw)": "pred_raw",
-        "Ensemble + calibration (ours)": "pred",
+        "Model (raw)": "pred_raw",
+        "Model + calibration (ours)": "pred",
     }
     if "iso_forecast_mw" in bt and bt["iso_forecast_mw"].notna().mean() > 0.5:
         models["ISO-NE day-ahead forecast"] = "iso_forecast_mw"

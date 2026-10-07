@@ -97,13 +97,10 @@ def main():
 
     # 4. SHAP (explainability for the app) -------------------------------
     try:
-        import shap
-        recent = rows[rows["target_date"] > rows["target_date"].max() - pd.Timedelta(days=365)]
-        explainer = shap.TreeExplainer(models["lgb"])
-        np.save(f"{C.DATA_DIR}/shap_values.npy", explainer.shap_values(recent[cols]))
-        recent[cols + [C.TARGET, "ts_local"]].to_csv(f"{C.DATA_DIR}/shap_features.csv")
-    except ImportError:
-        print("shap not installed; skipping explainability artifacts.")
+        from forecast.explain import save_shap
+        save_shap(models["lgb"], rows, cols)
+    except Exception as e:   # explanations are optional; never fail training over them
+        print(f"Skipping explainability artifacts: {e}")
 
     print(f"\nDone. Models trained through {bundle['trained_through']}.")
 

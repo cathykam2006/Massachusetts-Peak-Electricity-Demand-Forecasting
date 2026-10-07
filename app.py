@@ -131,32 +131,117 @@ def legend(items):
                 f"{'&emsp;'.join(parts)}</div>", unsafe_allow_html=True)
 
 
+# ---------------------------------------------------------------------------
+# Planning buffer, calibrated on daily peaks
+# ---------------------------------------------------------------------------
+# A shortfall costs far more than idle capacity, so planners hold more than the
+# expected peak. The buffer starts from the day's highest 90th-percentile hour,
+# then adds a margin learned from recent days: how far actual peaks landed above
+# that level. The margin is the quantile that would have held at the chosen risk.
+RISK_LEVELS = {"1 day in 10": 0.10, "1 day in 20": 0.05, "1 day in 50": 0.02}
+PLAN_WINDOW_DAYS = 90   # recent days used to size the margin
+MIN_PLAN_DAYS = 30      # need at least this many before trusting the margin
+
+
 @st.cache_data(ttl=3600)
-def buffer_stats():
-    """
-    Daily peaks in the backtest: actual, expected (point forecast) and plan-for
-    (top of the 80% range, i.e. the 90th-percentile forecast). Measures how often
-    the plan-for level was exceeded and how big the buffer was.
-    """
-    bt = load("backtest.csv")
-    if bt is None:
+def daily_peak_history():
+    """Complete days from the backtest and the scored live log: actual peak,
+    expected peak, and the raw plan base (highest uncalibrated P90 hour)."""
+    parts = []
+    for name in ("backtest.csv", "forecast_log.csv"):
+        df = load(name)
+        if df is None or "pred_hi_raw" not in df or TARGET not in df:
+            continue
+        df = df[df[TARGET].notna()]
+        g = df.groupby("target_date")
+        parts.append(pd.DataFrame({"actual": g[TARGET].max(), "expected": g["pred"].max(),
+                                   "base": g["pred_hi_raw"].max(), "hours": g[TARGET].count()}))
+    if not parts:
         return None
-    g = bt.groupby("target_date")
-    d = pd.DataFrame({"actual": g[TARGET].max(), "expected": g["pred"].max(),
-                      "plan": g["pred_hi"].max()}).dropna()
-    if d.empty:
+    d = pd.concat(parts)
+    d = d[~d.index.duplicated(keep="last")].sort_index()
+    d = d[d["hours"] >= 20]                    # skip partial days
+    d["score"] = d["actual"] - d["base"]       # how far the peak beat the raw base
+    return d
+
+
+PLAN_GAMMA = 0.01        # how fast the risk level adapts after misses or hits
+
+
+def plan_margin(hist, day, level):
+    """Margin for `day` at quantile `level`, using only days complete by its forecast
+    origin (D-2 and earlier)."""
+    newest = pd.Timestamp(day) - pd.Timedelta(days=2)
+    w = hist[(hist.index <= newest) & (hist.index > newest - pd.Timedelta(days=PLAN_WINDOW_DAYS))]
+    if len(w) < MIN_PLAN_DAYS:
         return None
+    return float(np.quantile(w["score"], min(max(level, 0.5), 0.999)))
+
+
+def _apply_updates(alpha, pending, day, risk):
+    """Adaptive conformal step: after each observed day, tighten the level if the peak
+    went above the plan, relax it slightly if not. Days only count once they're
+    complete by the forecast origin, two days before `day`."""
+    for d in sorted(k for k in pending if k <= pd.Timestamp(day) - pd.Timedelta(days=2)):
+        alpha += PLAN_GAMMA * (risk - pending.pop(d))
+    return alpha
+
+
+@st.cache_data(ttl=3600)
+def plan_replay(risk):
+    """Replay the planning rule day by day through history, out of sample."""
+    hist = daily_peak_history()
+    if hist is None:
+        return None
+    alpha, pending, rows = risk, {}, []
+    for day, r in hist.iterrows():
+        alpha = _apply_updates(alpha, pending, day, risk)
+        m = plan_margin(hist, day, 1 - alpha)
+        if m is None:
+            continue
+        plan = max(r["base"] + m, r["expected"])
+        miss = float(r["actual"] > plan)
+        pending[day] = miss
+        rows.append({"day": day, "actual": r["actual"], "expected": r["expected"], "plan": plan})
+    return {"daily": pd.DataFrame(rows).set_index("day") if rows else None,
+            "alpha": alpha, "pending": pending}
+
+
+@st.cache_data(ttl=3600)
+def plan_backtest(risk):
+    rep = plan_replay(risk)
+    if rep is None or rep["daily"] is None:
+        return None
+    d = rep["daily"].copy()
     d["buffer"] = d["plan"] - d["expected"]
     d["exceeded"] = d["actual"] > d["plan"]
     rate = d["exceeded"].mean()
-    # A fixed buffer added to every day's expected peak, sized to give the SAME
-    # exceedance rate, for comparison with the adaptive (uncertainty-based) one.
+    short = (d["actual"] - d["plan"])[d["exceeded"]]
+    # A single fixed buffer on the expected peak, sized for the same miss rate
     fixed = float(np.quantile(d["actual"] - d["expected"], 1 - rate)) if 0 < rate < 1 else np.nan
-    short = d.loc[d["exceeded"], "actual"] - d.loc[d["exceeded"], "plan"]
     return {"daily": d, "rate": rate, "avg_buffer": d["buffer"].mean(),
             "avg_buffer_pct": (d["buffer"] / d["expected"]).mean() * 100,
-            "fixed_buffer": fixed, "avg_shortfall": short.mean() if len(short) else 0.0,
-            "max_shortfall": short.max() if len(short) else 0.0}
+            "avg_shortfall": short.mean() if len(short) else 0.0,
+            "max_shortfall": short.max() if len(short) else 0.0, "fixed_buffer": fixed}
+
+
+def plan_for_day(lf, risk):
+    """Plan-for peak for one forecast day; falls back to the top of the 80% range."""
+    hist, rep = daily_peak_history(), plan_replay(risk)
+    if hist is None or rep is None or "pred_hi_raw" not in lf:
+        return float(lf["pred_hi"].max()), False
+    day = lf["target_date"].iloc[0]
+    alpha = _apply_updates(rep["alpha"], dict(rep["pending"]), day, risk)
+    m = plan_margin(hist, day, 1 - alpha)
+    if m is None:
+        return float(lf["pred_hi"].max()), False
+    return float(max(lf["pred_hi_raw"].max() + m, lf["pred"].max())), True
+
+
+def iso_complete(df):
+    """ISO-NE posts tomorrow's forecast during the day; treat it as missing until
+    it covers most of the day, so a few overnight hours aren't read as the peak."""
+    return "iso_forecast_mw" in df and df["iso_forecast_mw"].notna().sum() >= 20
 
 
 FULL_LEGEND = [("Actual", INK, "line"), ("Our forecast", OURS, "line"),
@@ -178,24 +263,29 @@ def page_tomorrow():
     st.title(f"{t:%A, %B %-d}: New England demand peaks near "
              f"{peak['pred']:,.0f} MW around {t:%-I %p}")
     issued = pd.Timestamp(lf["issued_at"].iloc[0])
-    plan = lf["pred_hi"].max()
-    stats = buffer_stats()
-    track = (f" Over the past year, actual peaks went above the plan-for level on "
-             f"{stats['rate'] * 100:.0f}% of days." if stats else "")
+    risk_label = st.session_state.get("risk", "1 day in 20")
+    risk = RISK_LEVELS[risk_label]
+    plan, calibrated = plan_for_day(lf, risk)
+    pb = plan_backtest(risk) if calibrated else None
+    track = (f" Sized so the actual peak goes above it about {risk_label} (backtest: "
+             f"{pb['rate'] * 100:.0f}% of days)." if pb else "")
     st.markdown(
         f"Plan for up to **{plan:,.0f} MW**, a {plan - peak['pred']:,.0f} MW buffer above the "
-        f"expected peak, sized from how uncertain tomorrow's forecast is.{track} "
-        f"Issued {issued:%B %-d at %-I:%M %p} ET, before any of these hours happened.")
+        f"expected peak.{track} Issued {issued:%B %-d at %-I:%M %p} ET, before any of these "
+        f"hours happened.")
 
-    legend(FULL_LEGEND[1:] + [("Plan-for level", PEAK, "dash")])
+    show_iso = iso_complete(lf)
+    items = FULL_LEGEND[1:3] + ([FULL_LEGEND[3]] if show_iso else []) + [("Plan-for level", PEAK, "dash")]
+    legend(items)
     peak_pt = alt.Chart(pd.DataFrame([peak])).encode(x="time:T", y="pred:Q")
     plan_df = pd.DataFrame({"plan": [plan], "label": [f"Plan for {plan:,.0f} MW"]})
-    plan_rule = alt.Chart(plan_df).mark_rule(color=PEAK, strokeDash=[6, 4], strokeWidth=1.5).encode(y="plan:Q")
+    plan_rule = alt.Chart(plan_df).mark_rule(color=PEAK, strokeDash=[6, 4], strokeWidth=1.5).encode(
+        y=alt.Y("plan:Q", scale=alt.Scale(zero=False)))
     plan_text = alt.Chart(plan_df).mark_text(align="left", dx=4, dy=-8, color=PEAK, fontSize=12).encode(
         y="plan:Q", x=alt.value(0), text="label:N")
-    chart = (forecast_chart(lf) + plan_rule + plan_text
+    chart = (forecast_chart(lf, show_iso=show_iso) + plan_rule + plan_text
              + peak_pt.mark_point(color=PEAK, size=120, filled=True)
-             + peak_pt.mark_text(dy=-16, color=PEAK, fontWeight="bold", fontSize=13).encode(
+             + peak_pt.mark_text(dy=20, color=OURS, fontWeight="bold", fontSize=13).encode(
                  text=alt.value(f"Expected peak {peak['pred']:,.0f} MW")))
     st.altair_chart(chart, width="stretch")
 
@@ -204,12 +294,13 @@ def page_tomorrow():
     c2.metric("Plan-for peak", f"{plan:,.0f} MW",
               delta=f"+{plan - peak['pred']:,.0f} MW buffer", delta_color="off")
     c3.metric("Expected peak hour", f"{t:%-I %p}")
-    if lf["iso_forecast_mw"].notna().any():
+    if show_iso:
         iso_peak = lf["iso_forecast_mw"].max()
         c4.metric("ISO-NE's peak forecast", f"{iso_peak:,.0f} MW",
                   delta=f"{iso_peak - peak['pred']:+,.0f} MW vs. ours", delta_color="off")
     else:
-        c4.metric("ISO-NE's peak forecast", "Not posted yet")
+        c4.metric("ISO-NE's peak forecast", "Pending", delta="Full day not posted yet",
+                  delta_color="off", delta_arrow="off")
 
     with st.expander("How this forecast is made"):
         st.markdown(
@@ -217,9 +308,10 @@ def page_tomorrow():
             "known at that moment: the calendar, the weather forecast for eight New England "
             "cities weighted by population, demand through two days ago, and this morning's "
             "demand so far. A calibration step corrects recent bias and sizes the 80% range "
-            "from how often recent forecasts missed. The plan-for level is the top of that "
-            "range: the 90th-percentile forecast, which demand should exceed only about one "
-            "hour in ten. Models were trained on data through "
+            "from how often recent forecasts missed. The plan-for level starts from the day's "
+            "highest 90th-percentile hour and adds a margin learned from the last 90 days of "
+            "actual peaks, sized to the risk level chosen in the sidebar. Models were trained "
+            "on data through "
             f"{lf['models_trained_through'].iloc[0]}. See **How it works** for details.")
 
 
@@ -274,7 +366,9 @@ def page_accuracy():
         st.info("Backtest results not found. Run `python train_dayahead.py` to create them.")
         return
     metrics = metrics.set_index(metrics.columns[0]).rename_axis("Forecast")
-    ours, iso, naive = ("Ensemble + calibration (ours)", "ISO-NE day-ahead forecast",
+    ours = "Model + calibration (ours)" if "Model + calibration (ours)" in metrics.index \
+        else "Ensemble + calibration (ours)"
+    iso, naive = ("ISO-NE day-ahead forecast",
                         "Seasonal naive (same hour last week)")
     m = metrics["MAPE (%)"]
     text = (f"Replaying a full year ({summary.get('backtest_start', '?')} to "
@@ -290,6 +384,7 @@ def page_accuracy():
     st.markdown(text)
 
     show = metrics.rename(index={ours: "Our model", "Ensemble (raw)": "Our model, before calibration",
+                                 "Model (raw)": "Our model, before calibration",
                                  iso: "ISO-NE's day-ahead forecast", naive: "Naive: same hour last week"})
     order = [r for r in ["Our model", "ISO-NE's day-ahead forecast", "Naive: same hour last week",
                          "Our model, before calibration", "LightGBM", "XGBoost"] if r in show.index]
@@ -302,51 +397,64 @@ def page_accuracy():
             st.caption(f"With perfect knowledge of the weather, the same model reaches {p:.2f}%. "
                        f"The difference is the cost of weather-forecast error.")
 
-    stats = buffer_stats()
-    if stats:
+    if daily_peak_history() is not None:
         st.subheader("Planning buffer")
-        d = stats["daily"]
-        txt = (f"Running short of power costs far more than holding a little extra, so planners "
-               f"use a higher number than the expected peak. Here the plan-for level is the top "
-               f"of the 80% range (the 90th-percentile forecast). Over the backtest year it averaged "
-               f"**{stats['avg_buffer']:,.0f} MW** ({stats['avg_buffer_pct']:.1f}%) above the "
-               f"expected peak, and the actual daily peak went above it on "
-               f"**{stats['rate'] * 100:.0f}% of days** ({int(d['exceeded'].sum())} of {len(d)}).")
-        if stats["rate"] > 0:
-            txt += (f" On those days it was short by {stats['avg_shortfall']:,.0f} MW on average "
-                    f"(worst: {stats['max_shortfall']:,.0f} MW).")
-        st.markdown(txt)
-        if not np.isnan(stats["fixed_buffer"]):
-            diff = stats["fixed_buffer"] - stats["avg_buffer"]
-            st.markdown(
-                f"Because the buffer grows on uncertain days and shrinks on calm ones, it's "
-                f"efficient: matching the same {stats['rate'] * 100:.0f}% miss rate with one fixed "
-                f"buffer would take **{stats['fixed_buffer']:,.0f} MW every day**, "
-                + (f"{diff:,.0f} MW more on average." if diff > 0 else
-                   f"{-diff:,.0f} MW less on average, so a fixed buffer would work as well here."))
-        plot = d.reset_index().rename(columns={"target_date": "day"})
-        long = plot.melt("day", ["actual", "expected", "plan"], var_name="series", value_name="MW")
-        long["series"] = long["series"].map({"actual": "Actual peak", "expected": "Expected peak",
-                                             "plan": "Plan-for peak"})
-        lines = alt.Chart(long).mark_line(strokeWidth=1.4).encode(
-            x=alt.X("day:T", title=None), y=alt.Y("MW:Q", title="Daily peak (MW)", scale=alt.Scale(zero=False)),
-            color=alt.Color("series:N", scale=alt.Scale(
-                domain=["Actual peak", "Expected peak", "Plan-for peak"], range=[INK, OURS, PEAK]),
-                legend=alt.Legend(orient="top", title=None)),
-            strokeDash=alt.StrokeDash("series:N", scale=alt.Scale(
-                domain=["Actual peak", "Expected peak", "Plan-for peak"], range=[[1, 0], [1, 0], [5, 3]]),
-                legend=None),
-            tooltip=[alt.Tooltip("day:T", format="%b %-d, %Y"), "series:N", alt.Tooltip("MW:Q", format=",.0f")])
-        misses = alt.Chart(plot[plot["exceeded"]]).mark_point(
-            color="#B03A2E", size=50, filled=True).encode(
-            x="day:T", y="actual:Q",
-            tooltip=[alt.Tooltip("day:T", format="%b %-d, %Y", title="Day above plan"),
-                     alt.Tooltip("actual:Q", format=",.0f", title="Actual peak"),
-                     alt.Tooltip("plan:Q", format=",.0f", title="Plan-for")])
-        st.altair_chart((lines + misses).properties(height=300), width="stretch")
-        st.caption("Red dots mark days when the actual peak went above the plan-for level. The right "
-                   "level depends on the cost of a shortfall compared with idle capacity: if running "
-                   "short costs nine times as much, the 90th percentile is the cost-minimizing choice.")
+        st.markdown(
+            "Running short of power costs far more than holding a little extra, so planners use a "
+            "higher number than the expected peak. The plan-for level here starts from the day's "
+            "highest 90th-percentile hour, then adds a margin learned from the previous 90 days: "
+            "how far actual peaks landed above that level. The margin also adapts: after a day "
+            "when the peak went above the plan it tightens, and after covered days it relaxes "
+            "slightly, which keeps it on target through heat waves and cold snaps when misses "
+            "come in streaks. Each day is sized using only days already observed, so these "
+            "results are out of sample.")
+        rows = {}
+        for label, r in RISK_LEVELS.items():
+            pb = plan_backtest(r)
+            if pb:
+                rows[label] = {"Target miss rate (%)": r * 100, "Actual miss rate (%)": pb["rate"] * 100,
+                               "Average buffer (MW)": pb["avg_buffer"],
+                               "Average buffer (%)": pb["avg_buffer_pct"],
+                               "Average shortfall on missed days (MW)": pb["avg_shortfall"],
+                               "Same miss rate with a fixed buffer (MW)": pb["fixed_buffer"]}
+        if rows:
+            tbl = pd.DataFrame(rows).T.rename_axis("Accepted risk")
+            st.dataframe(tbl.style.format({c: "{:,.0f}" if "MW" in c else "{:.1f}" for c in tbl.columns}),
+                         width="stretch")
+            st.caption("A miss means the actual daily peak went above the plan-for level. The fixed-buffer "
+                       "column shows what a single, same-size cushion every day would need to match that "
+                       "miss rate; when it's larger than the average buffer, sizing by uncertainty is "
+                       "the more efficient choice.")
+        risk_label = st.session_state.get("risk", "1 day in 20")
+        pb = plan_backtest(RISK_LEVELS[risk_label])
+        if pb:
+            d = pb["daily"]
+            plot = d.reset_index()
+            long = plot.melt("day", ["actual", "expected", "plan"], var_name="series", value_name="MW")
+            names = {"actual": "Actual peak", "expected": "Expected peak", "plan": "Plan-for peak"}
+            long["series"] = long["series"].map(names)
+            dom = list(names.values())
+            lines = alt.Chart(long).mark_line(strokeWidth=1.4).encode(
+                x=alt.X("day:T", title=None),
+                y=alt.Y("MW:Q", title="Daily peak (MW)", scale=alt.Scale(zero=False)),
+                color=alt.Color("series:N", scale=alt.Scale(domain=dom, range=[INK, OURS, PEAK]),
+                                legend=alt.Legend(orient="top", title=None)),
+                strokeDash=alt.StrokeDash("series:N", scale=alt.Scale(
+                    domain=dom, range=[[1, 0], [1, 0], [5, 3]]), legend=None),
+                tooltip=[alt.Tooltip("day:T", format="%b %-d, %Y"), "series:N",
+                         alt.Tooltip("MW:Q", format=",.0f")])
+            misses = alt.Chart(plot[plot["exceeded"]]).mark_point(
+                color="#B03A2E", size=50, filled=True).encode(
+                x="day:T", y="actual:Q",
+                tooltip=[alt.Tooltip("day:T", format="%b %-d, %Y", title="Day above plan"),
+                         alt.Tooltip("actual:Q", format=",.0f", title="Actual peak"),
+                         alt.Tooltip("plan:Q", format=",.0f", title="Plan-for")])
+            st.altair_chart((lines + misses).properties(height=300), width="stretch")
+            st.caption(f"Showing the {risk_label.lower()} setting (change it in the sidebar). Red dots "
+                       f"mark days when the actual peak went above the plan-for level. The right risk "
+                       f"level depends on the cost of a shortfall compared with idle capacity: if running "
+                       f"short costs 19 times as much, accepting a miss about one day in 20 is the "
+                       f"cost-minimizing choice.")
 
     st.subheader("Look at any week")
     lo_d, hi_d = bt["target_date"].min().date(), bt["target_date"].max().date()
@@ -391,8 +499,15 @@ def page_drivers():
     feat_cols = [c for c in sf.columns if c not in NOT_FEATURES][:sv.shape[1]]
     imp = pd.DataFrame({"Input": [FRIENDLY.get(c, c) for c in feat_cols],
                         "Impact": np.abs(sv).mean(axis=0)}).nlargest(12, "Impact")
+    agree = None
+    if os.path.exists(f"{DATA}/shap_agreement.txt"):
+        with open(f"{DATA}/shap_agreement.txt") as f:
+            agree = f.read().strip()
+    note = (f" Explained with a companion tree model that matches the forecast model's "
+            f"predictions closely (R² = {agree}), since SHAP can't be computed directly for "
+            f"linear trees." if agree else "")
     st.markdown("How much each input moves the forecast on a typical hour over the past year "
-                "(average absolute SHAP value).")
+                "(average absolute SHAP value)." + note)
     st.altair_chart(alt.Chart(imp).mark_bar(color=OURS).encode(
         x=alt.X("Impact:Q", title="Average effect on the forecast (MW)"),
         y=alt.Y("Input:N", sort="-x", title=None, axis=alt.Axis(labelLimit=300)),
@@ -448,14 +563,20 @@ EIA-930 API. Weather comes from Open-Meteo's archive of past weather *forecasts*
 the weather models predicted the day before. Training therefore sees the same forecast error
 the live model faces.
 
-**Models.** The forecast is an average of LightGBM and XGBoost, and LightGBM quantile models
-provide the 80% range. A calibration step, using only days already observed, corrects recent
+**Models.** A single regularized LightGBM model with linear trees: each leaf fits a small linear
+trend instead of a constant, so record cold snaps and heat waves aren't flattened. The settings
+were fixed in advance, judged on a year not used to choose them, and confirmed on the next
+year, where the model beat the previous version in most months with about half the gap between
+training and test error. LightGBM quantile models provide the 80% range. A calibration step, using only days already observed, corrects recent
 bias and resizes the range so it really covers 80% of hours.
 
 **Planning buffer.** Shortfalls cost far more than spare capacity, so the app also reports a
-plan-for level: the top of the 80% range, which is the 90th-percentile forecast. The buffer is
-larger on uncertain days and smaller on calm ones. The expected forecast stays unbiased, so
-accuracy comparisons remain fair.
+plan-for peak. It starts from the day's highest 90th-percentile hour, then adds a margin learned
+from the previous 90 days of actual peaks, sized so the peak goes above the plan at a chosen
+rate (one day in 10, 20 or 50). The margin adapts as it goes, tightening after misses and
+relaxing after covered days (adaptive conformal prediction), which holds the miss rate on
+target through heat waves and cold snaps. The buffer is larger on uncertain days and smaller on calm ones,
+and the expected forecast stays unbiased, so accuracy comparisons remain fair.
 
 **Testing.** A rolling-origin backtest over the most recent year: retrain every 28 days,
 forecast each day out of sample, step forward. The benchmarks are a naive "same hour last week"
@@ -485,5 +606,7 @@ PAGES = {
 }
 st.sidebar.markdown("### ⚡ New England demand forecast")
 choice = st.sidebar.radio("Page", list(PAGES), label_visibility="collapsed")
+st.sidebar.radio("Planning risk: how often the actual peak may go above the plan",
+                 list(RISK_LEVELS), index=1, key="risk")
 st.sidebar.caption("Hourly day-ahead forecast for the ISO New England grid, updated every morning.")
 PAGES[choice]()

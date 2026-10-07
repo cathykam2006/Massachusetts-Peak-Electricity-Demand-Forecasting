@@ -13,7 +13,7 @@ TARGET = "demand_mw"
 # Demand observations are assumed available up to (but not including) this
 # local hour on D-1. EIA-930 usually posts hourly data within a few hours, so 7
 # (i.e. midnight-6 AM on D-1) leaves a comfortable publication buffer before a
-# 10 AM issue time. If the data hasn't posted, LightGBM/XGBoost treat the
+# 10 AM issue time. If the data hasn't posted, LightGBM treats the
 # missing features as NaN and still produce a forecast.
 D1_CUTOFF_HOUR = 7
 

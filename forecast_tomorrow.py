@@ -103,8 +103,10 @@ def main():
     p = peak.loc[peak["pred"].idxmax()]
     print(f"\nTomorrow's peak: {p['pred']:,.0f} MW "
           f"({p['pred_lo']:,.0f}-{p['pred_hi']:,.0f}) at {p['ts_local']:%H:%M}")
-    if peak["iso_forecast_mw"].notna().any():
+    if peak["iso_forecast_mw"].notna().sum() >= 20:
         print(f"ISO-NE's day-ahead peak forecast: {peak['iso_forecast_mw'].max():,.0f} MW")
+    else:
+        print("ISO-NE's day-ahead forecast for tomorrow isn't fully posted yet.")
 
 
 if __name__ == "__main__":
