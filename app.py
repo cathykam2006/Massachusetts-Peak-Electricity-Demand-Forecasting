@@ -147,10 +147,24 @@ def miss_chart(df, height=200):
 
 
 def comparison_view(df, key=None, height=340):
-    """Actual demand against our forecast, then the hour-by-hour miss."""
-    legend([("Actual", INK, "line"), ("Our forecast", OURS, "line"), ("80% range", BAND, "band")])
-    st.altair_chart(forecast_chart(df, show_actual=True, show_iso=False, height=height),
-                    width="stretch")
+    """Actual demand against our forecast, then the hour-by-hour miss.
+    On a single day, also draws that day's plan-for level as a dashed line."""
+    chart = forecast_chart(df, show_actual=True, show_iso=False, height=height)
+    items = [("Actual", INK, "line"), ("Our forecast", OURS, "line"), ("80% range", BAND, "band")]
+    if df["target_date"].nunique() == 1:
+        # Size the plan from the full day's forecast, not just the hours already observed
+        day, log = df["target_date"].iloc[0], load("forecast_log.csv")
+        full = log[log["target_date"] == day] if log is not None else df
+        plan, _ = plan_for_day(full if len(full) else df,
+                               RISK_LEVELS[st.session_state.get("risk", "1 day in 20")])
+        plan_line = alt.Chart(pd.DataFrame({"plan": [plan]})).mark_rule(
+            color=PEAK, strokeDash=[6, 4], strokeWidth=2).encode(
+            y=alt.Y("plan:Q", scale=alt.Scale(zero=False)),
+            tooltip=[alt.Tooltip("plan:Q", format=",.0f", title="Plan-for peak")])
+        chart = alt.layer(chart, plan_line).properties(height=height)
+        items.append((f"Plan-for peak ({plan:,.0f} MW)", PEAK, "dash"))
+    legend(items)
+    st.altair_chart(chart, width="stretch")
     st.markdown("**How far our forecast missed, hour by hour**")
     st.altair_chart(miss_chart(df), width="stretch")
     st.caption("Zero is a perfect forecast. Blue bars: forecast too high. Amber bars: forecast too low.")
