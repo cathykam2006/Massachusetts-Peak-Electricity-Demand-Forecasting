@@ -23,7 +23,7 @@ TZ = "America/New_York"
 TARGET = "demand_mw"
 
 # Palette (matches .streamlit/config.toml)
-INK, OURS, BAND, ISO, PEAK = "#1E2B3A", "#11698E", "#BBD9E6", "#7A6F9B", "#D9900F"
+INK, OURS, BAND, ISO, PEAK = "#1E2B3A", "#11698E", "#BBD9E6", "#C2185B", "#D9900F"
 SEASON_COLORS = {"Winter": "#3B6EA8", "Spring": "#6AA67A", "Summer": "#D9900F", "Fall": "#9C6B4E"}
 
 FRIENDLY = {
@@ -95,37 +95,86 @@ def fmt_table(df):
     return df.style.format({c: "{:,.0f}" if "MW" in c else "{:.2f}" for c in df.columns})
 
 
-def forecast_chart(df, show_actual=False, show_iso=True, height=380):
-    """Band + forecast line (+ ISO-NE, + actual): the core visual of the app."""
+def forecast_chart(df, show_actual=False, show_iso=True, show_ours=True, height=380):
+    """Band + forecast line (+ ISO-NE, + actual): the core visual of the app.
+    Layer order: band, actual, our forecast, ISO-NE on top, so the thin dashed
+    ISO line is never hidden where it overlaps the actual line."""
     multi_day = df["time"].dt.date.nunique() > 1
     x = alt.X("time:T", title=None,
               axis=alt.Axis(format="%a %b %-d" if multi_day else "%-I %p", labelAngle=0))
     base = alt.Chart(df).encode(x=x)
     hour_tip = alt.Tooltip("time:T", format="%a %b %-d, %-I %p", title="Hour")
-    layers = [
-        base.mark_area(color=BAND, opacity=0.85).encode(
-            y=alt.Y("pred_lo:Q", title="Demand (MW)", scale=alt.Scale(zero=False)),
-            y2="pred_hi:Q",
+    y_scale = alt.Scale(zero=False)
+    layers = []
+    if show_ours:
+        layers.append(base.mark_area(color=BAND, opacity=0.85).encode(
+            y=alt.Y("pred_lo:Q", title="Demand (MW)", scale=y_scale), y2="pred_hi:Q",
             tooltip=[hour_tip, alt.Tooltip("pred_lo:Q", format=",.0f", title="Low end"),
-                     alt.Tooltip("pred_hi:Q", format=",.0f", title="High end")]),
-        base.mark_line(color=OURS, strokeWidth=2.5).encode(
-            y="pred:Q", tooltip=[hour_tip, alt.Tooltip("pred:Q", format=",.0f", title="Our forecast")]),
-    ]
-    if show_iso and "iso_forecast_mw" in df and df["iso_forecast_mw"].notna().any():
-        layers.append(base.mark_line(color=ISO, strokeDash=[5, 4], strokeWidth=1.8).encode(
-            y="iso_forecast_mw:Q",
-            tooltip=[hour_tip, alt.Tooltip("iso_forecast_mw:Q", format=",.0f", title="ISO-NE forecast")]))
+                     alt.Tooltip("pred_hi:Q", format=",.0f", title="High end")]))
     if show_actual and df[TARGET].notna().any():
-        layers.append(base.mark_line(color=INK, strokeWidth=1.6).encode(
-            y=f"{TARGET}:Q", tooltip=[hour_tip, alt.Tooltip(f"{TARGET}:Q", format=",.0f", title="Actual")]))
+        layers.append(base.mark_line(color=INK, strokeWidth=1.8).encode(
+            y=alt.Y(f"{TARGET}:Q", title="Demand (MW)", scale=y_scale),
+            tooltip=[hour_tip, alt.Tooltip(f"{TARGET}:Q", format=",.0f", title="Actual")]))
+    if show_ours:
+        layers.append(base.mark_line(color=OURS, strokeWidth=2.5).encode(
+            y=alt.Y("pred:Q", title="Demand (MW)", scale=y_scale),
+            tooltip=[hour_tip, alt.Tooltip("pred:Q", format=",.0f", title="Our forecast")]))
+    if show_iso and "iso_forecast_mw" in df and df["iso_forecast_mw"].notna().any():
+        layers.append(base.mark_line(color=ISO, strokeDash=[7, 4], strokeWidth=2.2).encode(
+            y=alt.Y("iso_forecast_mw:Q", title="Demand (MW)", scale=y_scale),
+            tooltip=[hour_tip, alt.Tooltip("iso_forecast_mw:Q", format=",.0f", title="ISO-NE forecast")]))
     return alt.layer(*layers).properties(height=height)
+
+
+def miss_chart(df, height=200):
+    """Forecast minus actual, hour by hour, for both forecasts. Zero = perfect;
+    above zero = forecast too high, below = too low. Makes small gaps visible."""
+    d = df[["time", TARGET, "pred", "iso_forecast_mw"]].dropna(subset=[TARGET]).copy()
+    d["Ours"] = d["pred"] - d[TARGET]
+    d["ISO-NE"] = d["iso_forecast_mw"] - d[TARGET]
+    long = d.melt("time", ["Ours", "ISO-NE"], var_name="Forecast", value_name="Miss").dropna()
+    multi_day = d["time"].dt.date.nunique() > 1
+    lines = alt.Chart(long).mark_line(strokeWidth=1.8).encode(
+        x=alt.X("time:T", title=None,
+                axis=alt.Axis(format="%a %b %-d" if multi_day else "%-I %p", labelAngle=0)),
+        y=alt.Y("Miss:Q", title="Forecast − actual (MW)"),
+        color=alt.Color("Forecast:N", scale=alt.Scale(domain=["Ours", "ISO-NE"], range=[OURS, ISO]),
+                        legend=alt.Legend(orient="top", title=None)),
+        strokeDash=alt.StrokeDash("Forecast:N", scale=alt.Scale(
+            domain=["Ours", "ISO-NE"], range=[[1, 0], [7, 4]]), legend=None),
+        tooltip=[alt.Tooltip("time:T", format="%a %b %-d, %-I %p", title="Hour"), "Forecast:N",
+                 alt.Tooltip("Miss:Q", format="+,.0f", title="Miss (MW)")])
+    zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color=INK, strokeWidth=1).encode(y="y:Q")
+    return (zero + lines).properties(height=height)
+
+
+COMPARE = {"Both forecasts": (True, True), "Ours vs. actual": (True, False),
+           "ISO-NE vs. actual": (False, True)}
+
+
+def comparison_view(df, key, height=340):
+    """A selector to isolate one forecast against actual, the main chart, and
+    a miss chart underneath that shows the gap to actual directly."""
+    choice = st.radio("Show", list(COMPARE), horizontal=True, key=key, label_visibility="collapsed")
+    ours, iso = COMPARE[choice]
+    items = [("Actual", INK, "line")]
+    if ours:
+        items += [("Our forecast", OURS, "line"), ("80% range", BAND, "band")]
+    if iso:
+        items += [("ISO-NE's forecast", ISO, "dash")]
+    legend(items)
+    st.altair_chart(forecast_chart(df, show_actual=True, show_iso=iso, show_ours=ours, height=height),
+                    width="stretch")
+    st.markdown("**How far each forecast missed, hour by hour**")
+    st.altair_chart(miss_chart(df), width="stretch")
+    st.caption("Zero is a perfect forecast. Above zero, the forecast was too high; below, too low.")
 
 
 def legend(items):
     """Inline legend: layered Altair charts don't build one on their own."""
     parts = []
     for label, color, style in items:
-        mark = {"line": "━━", "dash": "┄┄", "band": "███"}[style]
+        mark = {"line": "━━", "dash": "╍╍", "band": "███"}[style]
         parts.append(f"<span style='color:{color}'>{mark}</span>&nbsp;{label}")
     st.markdown(f"<div style='font-size:0.9rem;margin-bottom:0.25rem'>"
                 f"{'&emsp;'.join(parts)}</div>", unsafe_allow_html=True)
@@ -353,9 +402,7 @@ def page_track_record():
     st.subheader("Forecast vs. what happened")
     days = sorted(scored["target_date"].dt.date.unique(), reverse=True)
     pick = st.selectbox("Day", days, format_func=lambda d: f"{d:%A, %B %-d, %Y}")
-    legend(FULL_LEGEND)
-    st.altair_chart(forecast_chart(scored[scored["target_date"].dt.date == pick],
-                                   show_actual=True, height=320), width="stretch")
+    comparison_view(scored[scored["target_date"].dt.date == pick], key="cmp_day", height=320)
 
 
 def page_accuracy():
@@ -461,8 +508,7 @@ def page_accuracy():
     wk = st.date_input("Week starting", value=hi_d - pd.Timedelta(days=6),
                        min_value=lo_d, max_value=hi_d - pd.Timedelta(days=6))
     sel = bt[(bt["target_date"].dt.date >= wk) & (bt["target_date"].dt.date < wk + pd.Timedelta(days=7))]
-    legend(FULL_LEGEND)
-    st.altair_chart(forecast_chart(sel, show_actual=True, height=340), width="stretch")
+    comparison_view(sel, key="cmp_week")
 
     st.subheader("Error by hour of day")
     bt["hour"] = bt["time"].dt.hour
