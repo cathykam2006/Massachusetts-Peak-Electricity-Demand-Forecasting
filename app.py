@@ -127,47 +127,33 @@ def forecast_chart(df, show_actual=False, show_iso=True, show_ours=True, height=
 
 
 def miss_chart(df, height=200):
-    """Forecast minus actual, hour by hour, for both forecasts. Zero = perfect;
-    above zero = forecast too high, below = too low. Makes small gaps visible."""
-    d = df[["time", TARGET, "pred", "iso_forecast_mw"]].dropna(subset=[TARGET]).copy()
-    d["Ours"] = d["pred"] - d[TARGET]
-    d["ISO-NE"] = d["iso_forecast_mw"] - d[TARGET]
-    long = d.melt("time", ["Ours", "ISO-NE"], var_name="Forecast", value_name="Miss").dropna()
+    """Our forecast minus actual, hour by hour. Zero = perfect; above zero =
+    forecast too high, below = too low. Makes small gaps visible."""
+    d = df[["time", TARGET, "pred"]].dropna().copy()
+    d["Miss"] = d["pred"] - d[TARGET]
     multi_day = d["time"].dt.date.nunique() > 1
-    lines = alt.Chart(long).mark_line(strokeWidth=1.8).encode(
-        x=alt.X("time:T", title=None,
-                axis=alt.Axis(format="%a %b %-d" if multi_day else "%-I %p", labelAngle=0)),
+    axis = (alt.Axis(format="%a %b %-d", tickCount="day", labelAngle=0) if multi_day
+            else alt.Axis(format="%-I %p", labelAngle=0))
+    bars = alt.Chart(d).mark_bar(width=3).encode(
+        x=alt.X("time:T", title=None, axis=axis),
         y=alt.Y("Miss:Q", title="Forecast − actual (MW)"),
-        color=alt.Color("Forecast:N", scale=alt.Scale(domain=["Ours", "ISO-NE"], range=[OURS, ISO]),
-                        legend=alt.Legend(orient="top", title=None)),
-        strokeDash=alt.StrokeDash("Forecast:N", scale=alt.Scale(
-            domain=["Ours", "ISO-NE"], range=[[1, 0], [7, 4]]), legend=None),
-        tooltip=[alt.Tooltip("time:T", format="%a %b %-d, %-I %p", title="Hour"), "Forecast:N",
+        color=alt.condition("datum.Miss >= 0", alt.value(OURS), alt.value(PEAK)),
+        tooltip=[alt.Tooltip("time:T", format="%a %b %-d, %-I %p", title="Hour"),
+                 alt.Tooltip(f"{TARGET}:Q", format=",.0f", title="Actual"),
+                 alt.Tooltip("pred:Q", format=",.0f", title="Our forecast"),
                  alt.Tooltip("Miss:Q", format="+,.0f", title="Miss (MW)")])
     zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color=INK, strokeWidth=1).encode(y="y:Q")
-    return (zero + lines).properties(height=height)
+    return (bars + zero).properties(height=height)
 
 
-COMPARE = {"Both forecasts": (True, True), "Ours vs. actual": (True, False),
-           "ISO-NE vs. actual": (False, True)}
-
-
-def comparison_view(df, key, height=340):
-    """A selector to isolate one forecast against actual, the main chart, and
-    a miss chart underneath that shows the gap to actual directly."""
-    choice = st.radio("Show", list(COMPARE), horizontal=True, key=key, label_visibility="collapsed")
-    ours, iso = COMPARE[choice]
-    items = [("Actual", INK, "line")]
-    if ours:
-        items += [("Our forecast", OURS, "line"), ("80% range", BAND, "band")]
-    if iso:
-        items += [("ISO-NE's forecast", ISO, "dash")]
-    legend(items)
-    st.altair_chart(forecast_chart(df, show_actual=True, show_iso=iso, show_ours=ours, height=height),
+def comparison_view(df, key=None, height=340):
+    """Actual demand against our forecast, then the hour-by-hour miss."""
+    legend([("Actual", INK, "line"), ("Our forecast", OURS, "line"), ("80% range", BAND, "band")])
+    st.altair_chart(forecast_chart(df, show_actual=True, show_iso=False, height=height),
                     width="stretch")
-    st.markdown("**How far each forecast missed, hour by hour**")
+    st.markdown("**How far our forecast missed, hour by hour**")
     st.altair_chart(miss_chart(df), width="stretch")
-    st.caption("Zero is a perfect forecast. Above zero, the forecast was too high; below, too low.")
+    st.caption("Zero is a perfect forecast. Blue bars: forecast too high. Amber bars: forecast too low.")
 
 
 def legend(items):
