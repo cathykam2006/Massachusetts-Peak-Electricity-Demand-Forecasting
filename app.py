@@ -721,9 +721,32 @@ PAGES = {
     "Where the power comes from": page_supply,
     "How it works": page_method,
 }
+def data_freshness():
+    """Latest forecast issue time and latest supply hour, in Eastern time."""
+    parts = []
+    lf = load("latest_forecast.csv")
+    if lf is not None and "issued_at" in lf and len(lf):
+        issued = pd.Timestamp(lf["issued_at"].iloc[0])
+        parts.append(f"Latest forecast issued {issued:%b %-d, %Y at %-I:%M %p} ET")
+    sup = load("supply.csv")
+    if sup is not None and len(sup):
+        parts.append(f"Supply data through {sup['time'].max():%b %-d, %-I %p} ET")
+    return parts
+
+
 st.sidebar.markdown("### ⚡ New England demand forecast")
+st.sidebar.markdown("Built by **Cathy Kam**")
 choice = st.sidebar.radio("Page", list(PAGES), label_visibility="collapsed")
 st.sidebar.radio("Planning risk: how often the actual peak may go above the plan",
                  list(RISK_LEVELS), index=1, key="risk")
-st.sidebar.caption("Hourly day-ahead forecast for the ISO New England grid, updated every morning.")
+st.sidebar.markdown("**🟢 Live data, updated automatically every morning**")
+st.sidebar.caption(
+    "Each day at about 10:30 AM ET, an automated job pulls the latest grid data from the "
+    "U.S. Energy Information Administration and weather forecasts from Open-Meteo, issues "
+    "a new forecast, and refreshes this app. No manual updates.")
+for line in data_freshness():
+    st.sidebar.caption(line)
 PAGES[choice]()
+st.divider()
+st.caption("Built by Cathy Kam. Live data from the U.S. EIA (EIA-930) and Open-Meteo.com, "
+           "refreshed automatically every morning.")
