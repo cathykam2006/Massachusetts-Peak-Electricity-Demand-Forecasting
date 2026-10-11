@@ -24,10 +24,16 @@ jobs:
         env:
           EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
         run: python forecast_tomorrow.py
+      - name: Update supply mix
+        continue-on-error: true      # never block the forecast commit
+        env:
+          EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
+        run: python update_supply.py
       - name: Commit forecast
         run: |
           git config user.name "forecast-bot"
           git config user.email "actions@github.com"
           git add data/dayahead/latest_forecast.csv data/dayahead/forecast_log.csv
+          git add data/dayahead/supply.csv 2>/dev/null || true
           git diff --cached --quiet || git commit -m "Day-ahead forecast $(date -u +%F)"
           git push

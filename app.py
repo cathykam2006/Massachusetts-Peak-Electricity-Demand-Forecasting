@@ -589,6 +589,76 @@ def page_drivers():
         ).properties(height=260), width="stretch")
 
 
+# Supply mix: colors validated for adjacent-pair separation in stack order
+SUPPLY_ORDER = ["Nuclear", "Hydro", "Solar", "Natural gas", "Wind", "Net imports", "Oil & other"]
+SUPPLY_COLORS = ["#eb6834", "#2a78d6", "#eda100", "#6250d6", "#1baf7a", "#e87ba4", "#008300"]
+
+
+def page_supply():
+    st.title("Where the power comes from")
+    sup = load("supply.csv")
+    if sup is None or sup.empty:
+        st.info("Supply data not found yet. Run `python update_supply.py` (or wait for the next "
+                "daily GitHub Action run) to pull generation by source from EIA.")
+        return
+    sources = [c for c in SUPPLY_ORDER if c in sup.columns]
+    last = sup["time"].max().normalize()
+    first = sup["time"].min().normalize()
+    default = max(first, last - pd.Timedelta(days=6))
+    wk = st.date_input("Week starting", value=default.date(), min_value=first.date(),
+                       max_value=max(first, last - pd.Timedelta(days=6)).date(), key="supply_week")
+    sel = sup[(sup["time"] >= pd.Timestamp(wk)) & (sup["time"] < pd.Timestamp(wk) + pd.Timedelta(days=7))]
+    sel = sel.dropna(subset=sources, how="all")
+    if sel.empty:
+        st.info("No supply data for that week.")
+        return
+
+    totals = sel[sources].clip(lower=0).sum()
+    share = totals / totals.sum() * 100
+    top = share.sort_values(ascending=False)
+    peak = sel.loc[sel["demand_mw"].idxmax()] if sel["demand_mw"].notna().any() else None
+    lead = (f"For the week of {pd.Timestamp(wk):%B %-d}, **{top.index[0].lower()} supplied "
+            f"{top.iloc[0]:.0f}%** of New England's electricity, followed by "
+            f"{top.index[1].lower()} ({top.iloc[1]:.0f}%) and {top.index[2].lower()} ({top.iloc[2]:.0f}%).")
+    if peak is not None and "Natural gas" in sources:
+        pk_total = sum(max(peak[c], 0) for c in sources if pd.notna(peak[c]))
+        lead += (f" At the week's peak hour ({peak['time']:%a %-I %p}, {peak['demand_mw']:,.0f} MW), "
+                 f"natural gas covered {peak['Natural gas'] / pk_total * 100:.0f}% of supply.")
+    st.markdown(lead)
+
+    long = sel.melt("time", sources, var_name="Source", value_name="MW").dropna()
+    long["MW"] = long["MW"].clip(lower=0)   # storage charging / net exports are not supply
+    long["order"] = long["Source"].map({s: i for i, s in enumerate(SUPPLY_ORDER)})
+    color = alt.Color("Source:N", scale=alt.Scale(domain=SUPPLY_ORDER, range=SUPPLY_COLORS),
+                      sort=SUPPLY_ORDER, legend=alt.Legend(orient="top", title=None))
+    hour_tip = alt.Tooltip("time:T", format="%a %b %-d, %-I %p", title="Hour")
+    area = alt.Chart(long).mark_area(stroke="white", strokeWidth=0.5).encode(
+        x=alt.X("time:T", title=None, axis=alt.Axis(format="%a %b %-d", tickCount="day", labelAngle=0)),
+        y=alt.Y("MW:Q", stack="zero", title="Supply (MW)"),
+        color=color, order=alt.Order("order:Q"),
+        tooltip=[hour_tip, "Source:N", alt.Tooltip("MW:Q", format=",.0f")])
+    demand = alt.Chart(sel).mark_line(color=INK, strokeWidth=1.6, strokeDash=[4, 2]).encode(
+        x="time:T", y="demand_mw:Q",
+        tooltip=[hour_tip, alt.Tooltip("demand_mw:Q", format=",.0f", title="Demand (MW)")])
+    st.altair_chart(alt.layer(area, demand).properties(height=380), width="stretch")
+    st.caption("Stacked areas: hourly supply by source. Dashed line: reported demand. Supply and demand "
+               "differ slightly because of storage charging and reporting differences. Net imports come "
+               "from New York, Québec, and New Brunswick.")
+
+    table = pd.DataFrame({
+        "Energy for the week (GWh)": totals / 1000,
+        "Share (%)": share,
+        "Average (MW)": sel[sources].clip(lower=0).mean(),
+    })
+    if peak is not None:
+        table["At peak hour (MW)"] = [max(peak[c], 0) if pd.notna(peak[c]) else 0 for c in sources]
+    table = table.loc[top.index].rename_axis("Source")
+    st.dataframe(table.style.format({c: "{:,.1f}" if "GWh" in c or "%" in c else "{:,.0f}"
+                                     for c in table.columns}), width="stretch")
+    st.caption("Data: U.S. EIA Hourly Electric Grid Monitor (EIA-930), ISO New England. "
+               "Solar here is grid-connected generation only; rooftop solar shows up as lower demand.")
+
+
 def page_method():
     st.title("How it works")
     st.markdown("""
@@ -648,6 +718,7 @@ PAGES = {
     "Live track record": page_track_record,
     "Accuracy": page_accuracy,
     "What drives demand": page_drivers,
+    "Where the power comes from": page_supply,
     "How it works": page_method,
 }
 st.sidebar.markdown("### ⚡ New England demand forecast")
