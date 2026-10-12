@@ -1,5 +1,5 @@
 ,MAE (MW),RMSE (MW),MAPE (%),Bias (MW),Daily peak MAPE (%),Peak hour ±1h (%)
-Seasonal naive (same hour last week),1476.14,2025.02,10.99,-6.9,8.32,90.96
-Model (raw),471.31,639.28,3.6,-4.29,2.44,95.89
-Model + calibration (ours),474.42,639.81,3.62,-2.69,2.45,95.89
-ISO-NE day-ahead forecast,373.91,523.26,3.04,-293.42,1.25,97.53
+Seasonal naive (same hour last week),1481.67,2028.55,11.05,9.53,8.36,91.23
+Model (raw),413.5,559.34,3.16,12.32,2.15,96.16
+Model + calibration (ours),416.6,560.52,3.18,6.35,2.17,96.16
+ISO-NE day-ahead forecast,373.34,522.53,3.04,-293.89,1.24,97.81
