@@ -46,6 +46,11 @@ WEATHER_VARS = {
     "shortwave_radiation": "ghi_wm2",
 }
 
+# Weather models blended when the blend is switched on (train_dayahead.py
+# --weather-blend). Each is requested separately so one model failing never
+# stops a forecast. Chosen in advance: the four main global models.
+BLEND_MODELS = ["gfs_seamless", "ecmwf_ifs025", "icon_seamless", "gem_seamless"]
+
 # The Previous Runs API stores what each weather model predicted N days before
 # the valid time. "previous_day1" ~= a forecast issued the day before, which
 # matches our 14-38 hour lead time. Archive starts January 2024.

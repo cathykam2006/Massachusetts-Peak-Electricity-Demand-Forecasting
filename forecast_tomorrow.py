@@ -29,6 +29,7 @@ from forecast.models import predict
 
 LOG_PATH = f"{C.DATA_DIR}/forecast_log.csv"
 LATEST_PATH = f"{C.DATA_DIR}/latest_forecast.csv"
+BACKTEST_PATH = f"{C.DATA_DIR}/backtest.csv"
 
 
 def main():
@@ -46,7 +47,8 @@ def main():
     # 1. Inputs -----------------------------------------------------------
     demand = clean_demand(pull_eia_series("D", start, end, api_key))
     iso_df = pull_eia_series("DF", start, end, api_key)
-    wx = pull_weather_live(past_days=4, forecast_days=3)
+    wx = pull_weather_live(past_days=4, forecast_days=3,
+                           models=bundle.get("weather_models"))
     print(f"  latest demand observation: "
           f"{demand.last_valid_index().tz_convert(C.TZ):%Y-%m-%d %H:%M}")
 
@@ -68,17 +70,35 @@ def main():
     raw = raw.rename(columns={"pred": "pred_raw", "pred_lo": "pred_lo_raw",
                               "pred_hi": "pred_hi_raw"})
 
-    # 3. Calibration from the live log (fallback: backtest) --------------
-    log = pd.read_csv(LOG_PATH, index_col="period_utc", parse_dates=["period_utc"]) \
-        if os.path.exists(LOG_PATH) else pd.DataFrame()
+    # 3. Calibration ----------------------------------------------------
+    # Errors from the backtest and the live log form one continuous history, so the
+    # bias and interval corrections work from the first live day instead of waiting
+    # a week for enough scored days. Live days override backtest days if both exist.
+    log = pd.read_csv(LOG_PATH, index_col="period_utc") if os.path.exists(LOG_PATH) else pd.DataFrame()
     if not log.empty:
         log.index = pd.to_datetime(log.index, utc=True)
         log["target_date"] = pd.to_datetime(log["target_date"])
+        # Fill in actuals that have arrived since earlier runs
         log[C.TARGET] = demand.reindex(log.index).combine_first(log.get(C.TARGET))
-        bias, q = calibration_state(log, tomorrow)
+        # Refresh ISO-NE's forecast: it is only partly posted when ours is issued
+        log["iso_forecast_mw"] = iso_df.reindex(log.index).combine_first(log.get("iso_forecast_mw"))
+    cols = [C.TARGET, "pred_raw", "pred_lo_raw", "pred_hi_raw", "target_date"]
+    hist = []
+    if os.path.exists(BACKTEST_PATH):
+        bt = pd.read_csv(BACKTEST_PATH, index_col="period_utc")
+        bt.index = pd.to_datetime(bt.index, utc=True)
+        bt["target_date"] = pd.to_datetime(bt["target_date"])
+        if set(cols) <= set(bt.columns):
+            hist.append(bt[cols])
+    if not log.empty and set(cols) <= set(log.columns):
+        hist.append(log[cols])
+    if hist:
+        h = pd.concat(hist)
+        h = h[~h.index.duplicated(keep="last")].sort_index()
+        bias, q = calibration_state(h, tomorrow)
+        source = "backtest + live history"
     else:
         bias, q = 0.0, 0.0
-    source = "live log"
     if (bias, q) == (0.0, 0.0):
         fb = bundle["fallback_calibration"]
         bias, q, source = fb["bias"], fb["q"], "backtest fallback"

@@ -124,9 +124,10 @@ def _weighted_frame(payload, suffix=""):
     out = {}
     for om_var, col in C.WEATHER_VARS.items():
         key = om_var + suffix
+        n = len(payload[0]["hourly"]["time"])
         mat = np.array(
-            [np.array(loc["hourly"][key], dtype=float) for loc in payload]
-        )  # shape: (n_cities, n_hours)
+            [np.array(loc["hourly"].get(key) or [None] * n, dtype=float) for loc in payload]
+        )  # shape: (n_cities, n_hours); a variable a model lacks becomes NaN
         mask = ~np.isnan(mat)
         wsum = (w[:, None] * mask).sum(axis=0)
         val = np.nansum(w[:, None] * np.nan_to_num(mat), axis=0)
@@ -153,12 +154,65 @@ def _date_chunks(start, end, months=3):
         s = chunk_end + pd.Timedelta(days=1)
 
 
-def pull_weather_history(start, end, mode="forecast"):
+def _pull_history_one(url, suffix, start, end, model=None):
+    frames = []
+    for s_, e_ in _date_chunks(start, end):
+        params = {
+            **_coord_params(),
+            "hourly": ",".join(v + suffix for v in C.WEATHER_VARS),
+            "start_date": s_, "end_date": e_,
+        }
+        if model:
+            params["models"] = model
+        frames.append(_weighted_frame(_get(url, params), suffix))
+        time.sleep(2 if model else 1)  # be polite to the free API
+    wx = pd.concat(frames)
+    return wx[~wx.index.duplicated(keep="last")].sort_index()
+
+
+def blend_models(frames):
+    """
+    Combine weather from several models: the mean of each variable across models,
+    plus the spread (standard deviation) of temperature, cloud cover and sunshine.
+    The spread tells the model how uncertain the weather itself is.
+    """
+    cols = list(C.WEATHER_VARS.values())
+    idx = frames[0].index
+    for f in frames[1:]:
+        idx = idx.union(f.index)
+    stack = {c: pd.concat([f[c].reindex(idx) for f in frames], axis=1) for c in cols}
+    out = pd.DataFrame({c: stack[c].mean(axis=1, skipna=True) for c in cols}, index=idx)
+    if len(frames) > 1:
+        for c, name in [("temp_c", "temp_spread"), ("cloud_pct", "cloud_spread"),
+                        ("ghi_wm2", "ghi_spread")]:
+            if c in stack:
+                out[name] = stack[c].std(axis=1, skipna=True)
+    return out
+
+
+def _try_models(fetch, models):
+    """Fetch each model separately; skip any that fail or come back empty."""
+    frames, used = [], []
+    for m in models:
+        try:
+            f = fetch(m)
+            if f["temp_c"].notna().mean() > 0.5:
+                frames.append(f)
+                used.append(m)
+            else:
+                print(f"  weather model {m}: mostly empty, skipped")
+        except Exception as e:  # one model failing must never stop the forecast
+            print(f"  weather model {m}: failed ({str(e)[:120]}), skipped")
+    return frames, used
+
+
+def pull_weather_history(start, end, mode="forecast", models=None):
     """
     Historical weather for training/backtesting.
 
     mode="forecast": what the models PREDICTED one day ahead (realistic).
     mode="archive":  what actually HAPPENED (perfect-hindsight upper bound).
+    models: optional list of Open-Meteo model ids to blend (forecast mode only).
     """
     if mode == "forecast":
         if pd.Timestamp(start) < pd.Timestamp(C.PREVIOUS_RUNS_START):
@@ -172,33 +226,43 @@ def pull_weather_history(start, end, mode="forecast"):
     else:
         raise ValueError("mode must be 'forecast' or 'archive'")
 
-    frames = []
-    for s, e in _date_chunks(start, end):
-        params = {
-            **_coord_params(),
-            "hourly": ",".join(v + suffix for v in C.WEATHER_VARS),
-            "start_date": s, "end_date": e,
-        }
-        frames.append(_weighted_frame(_get(url, params), suffix))
-        time.sleep(1)  # be polite to the free API
-    wx = pd.concat(frames)
-    return wx[~wx.index.duplicated(keep="last")].sort_index()
+    if models and mode == "forecast":
+        frames, used = _try_models(lambda m: _pull_history_one(url, suffix, start, end, m), models)
+        if frames:
+            print(f"  blended weather models: {', '.join(used)}")
+            return blend_models(frames)
+        print("  no blended model succeeded; using the default single model")
+    return _pull_history_one(url, suffix, start, end)
 
 
-def pull_weather_live(past_days=8, forecast_days=3):
-    """Current forecast run, for the operational (tomorrow) forecast."""
+def _pull_live_one(past_days, forecast_days, model=None):
     params = {
         **_coord_params(),
         "hourly": ",".join(C.WEATHER_VARS),
         "past_days": past_days, "forecast_days": forecast_days,
     }
+    if model:
+        params["models"] = model
     return _weighted_frame(_get(OM_FORECAST_URL, params))
+
+
+def pull_weather_live(past_days=8, forecast_days=3, models=None):
+    """Current forecast run(s), for the operational (tomorrow) forecast. Uses the
+    same model set the deployed model was trained on."""
+    if models:
+        frames, used = _try_models(lambda m: _pull_live_one(past_days, forecast_days, m), models)
+        if frames:
+            if len(used) < len(models):
+                print(f"  note: live blend uses {len(used)} of {len(models)} weather models")
+            return blend_models(frames)
+        print("  no blended model succeeded; using the default single model")
+    return _pull_live_one(past_days, forecast_days)
 
 
 # ---------------------------------------------------------------------------
 # Assemble
 # ---------------------------------------------------------------------------
-def build_hourly_frame(start, end, api_key, weather_mode="forecast"):
+def build_hourly_frame(start, end, api_key, weather_mode="forecast", weather_models=None):
     """
     One hourly UTC-indexed frame: demand_mw, iso_forecast_mw, weather columns.
 
@@ -211,7 +275,7 @@ def build_hourly_frame(start, end, api_key, weather_mode="forecast"):
     print("Pulling ISO-NE day-ahead forecast (EIA type DF)...")
     iso_df = pull_eia_series("DF", start, end, api_key)
     print(f"Pulling population-weighted weather (mode={weather_mode})...")
-    wx = pull_weather_history(start, end, mode=weather_mode)
+    wx = pull_weather_history(start, end, mode=weather_mode, models=weather_models)
 
     df = pd.DataFrame({C.TARGET: demand})
     df["iso_forecast_mw"] = iso_df.reindex(df.index)

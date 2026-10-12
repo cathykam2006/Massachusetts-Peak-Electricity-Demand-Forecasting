@@ -41,6 +41,10 @@ def main():
     ap.add_argument("--end", default=yesterday)
     ap.add_argument("--weather", choices=["forecast", "archive"], default="forecast")
     ap.add_argument("--skip-backtest", action="store_true")
+    ap.add_argument("--weather-blend", action="store_true",
+                    help="blend several weather models (run compare_weather.py first)")
+    ap.add_argument("--no-weather-blend", action="store_true",
+                    help="switch back to the single default weather model")
     args = ap.parse_args()
 
     api_key = os.environ.get("EIA_API_KEY")
@@ -51,7 +55,16 @@ def main():
     suffix = "" if args.weather == "forecast" else "_perfect_weather"
 
     # 1. Data ------------------------------------------------------------
-    hourly = build_hourly_frame(args.start, args.end, api_key, weather_mode=args.weather)
+    # Keep whatever the deployed model uses unless told otherwise, so the monthly
+    # automatic retrain never silently switches the weather setup.
+    weather_models = None
+    if args.weather_blend:
+        weather_models = C.BLEND_MODELS
+    elif not args.no_weather_blend and os.path.exists(f"{C.MODEL_DIR}/bundle.pkl"):
+        weather_models = joblib.load(f"{C.MODEL_DIR}/bundle.pkl").get("weather_models")
+    print(f"Weather: {'blend of ' + ', '.join(weather_models) if weather_models else 'single default model'}")
+    hourly = build_hourly_frame(args.start, args.end, api_key, weather_mode=args.weather,
+                                weather_models=weather_models)
     hourly.to_csv(f"{C.DATA_DIR}/hourly{suffix}.csv")
     print(f"Hourly frame: {hourly.shape}, {hourly[C.TARGET].isna().mean():.1%} target missing")
 
@@ -88,6 +101,7 @@ def main():
     models = fit_models(rows[cols], rows[C.TARGET])
     bundle = {
         "models": models,
+        "weather_models": weather_models if "temp_spread" in hourly.columns else None,
         "feature_cols": cols,
         "trained_through": str(rows["target_date"].max().date()),
         "fallback_calibration": {"bias": fallback[0], "q": fallback[1]},

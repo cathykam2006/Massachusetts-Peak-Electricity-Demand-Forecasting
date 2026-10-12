@@ -377,16 +377,39 @@ def page_track_record():
         st.info(msg)
         return
 
-    inside = (scored[TARGET] >= scored["pred_lo"]) & (scored[TARGET] <= scored["pred_hi"])
-    iso_m = mape(scored[TARGET], scored["iso_forecast_mw"])
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Days scored", f"{scored['target_date'].nunique()}")
-    c2.metric("Our average error", f"{mape(scored[TARGET], scored['pred']):.2f}%")
-    c3.metric("ISO-NE's average error", "n/a" if np.isnan(iso_m) else f"{iso_m:.2f}%")
-    c4.metric("Hours inside 80% range", f"{inside.mean() * 100:.0f}%")
+    # Score complete days only: a day still in progress would be judged on its
+    # hardest hours (overnight and midday) before the evening comes in.
+    hours = scored.groupby("target_date")[TARGET].transform("count")
+    full = scored[hours >= 23]
+    partial_days = sorted(scored.loc[hours < 23, "target_date"].dt.date.unique())
+    if full.empty:
+        st.info("The first day isn't complete yet. Days are scored once all 24 hours of actual "
+                "demand are in.")
+    else:
+        # Head-to-head on the same hours: ISO-NE's forecast is sometimes missing
+        both = full[full["iso_forecast_mw"].notna()]
+        inside = (full[TARGET] >= full["pred_lo"]) & (full[TARGET] <= full["pred_hi"])
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Complete days scored", f"{full['target_date'].nunique()}")
+        c2.metric("Our average error", f"{mape(full[TARGET], full['pred']):.2f}%")
+        if len(both):
+            c3.metric("ISO-NE's average error", f"{mape(both[TARGET], both['iso_forecast_mw']):.2f}%")
+        else:
+            c3.metric("ISO-NE's average error", "n/a")
+        c4.metric("Hours inside 80% range", f"{inside.mean() * 100:.0f}%")
+        notes = []
+        if len(both) < len(full):
+            notes.append(f"ISO-NE's forecast is available for {len(both)} of {len(full)} hours; on "
+                         f"those same hours our error was {mape(both[TARGET], both['pred']):.2f}%.")
+        if partial_days:
+            notes.append("Still in progress, not yet scored: "
+                         + ", ".join(f"{d:%b %-d}" for d in partial_days) + ".")
+        if notes:
+            st.caption(" ".join(notes))
+    scored_days = full if not full.empty else scored
 
-    daily = pd.DataFrame({"Ours": mape_by(scored, "target_date", "pred"),
-                          "ISO-NE": mape_by(scored, "target_date", "iso_forecast_mw")})
+    daily = pd.DataFrame({"Ours": mape_by(scored_days, "target_date", "pred"),
+                          "ISO-NE": mape_by(scored_days, "target_date", "iso_forecast_mw")})
     long = daily.rename_axis("day").reset_index().melt("day", var_name="Forecast",
                                                        value_name="Error").dropna()
     st.subheader("Daily error")

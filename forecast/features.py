@@ -119,6 +119,7 @@ def feature_columns(df):
         "hour", "dayofweek", "month", "doy_sin", "doy_cos",
         "is_weekend", "is_holiday", "is_holiday_season",
         *WEATHER_COLS,
+        "temp_spread", "cloud_spread", "ghi_spread",
         "hdh", "cdh", "temp_max_d", "temp_min_d", "temp_mean_d",
         "temp_mean_3d_wtd", "cdd_d", "hdd_d", "ghi_sum_d", "ghi_x_daylight",
         "load_same_hour_d2", "load_same_hour_d7", "load_same_hour_d14",
