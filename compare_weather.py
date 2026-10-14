@@ -1,31 +1,78 @@
 """
-compare_weather.py - does blending several weather models improve the forecast?
+compare_weather.py - does a different set of weather models improve the forecast?
 
 A pre-registered test, so the decision can't be tuned to the result:
-  * Same model, same features, same hours. The ONLY change is the weather input:
-    the default single model vs. a blend of BLEND_MODELS (mean + spread).
+  * Same model, same features, same hours. The ONLY change is the weather input.
   * Judged on two separate years: Oct 2024 - Oct 2025 and Oct 2025 - Oct 2026.
-  * PASS only if the blend lowers average error in BOTH years AND wins the
-    majority of months in BOTH years. Otherwise keep the single model.
+  * PASS only if the candidate lowers average error in BOTH years AND wins the
+    majority of months in BOTH years. Otherwise keep the current setup.
 
-Usage (needs internet; about 10-15 minutes):
-    python compare_weather.py
+Usage (needs internet):
+    python compare_weather.py                # single model vs. the 4-model blend
+    python compare_weather.py --add hrrr     # current blend vs. blend + NOAA HRRR
+    python compare_weather.py --add nbm      # current blend vs. blend + NOAA NBM
+
+Each weather model is downloaded once and cached in data/dayahead/wx_<model>.csv,
+so later comparisons are quicker.
 """
 
+import argparse
 import os
 import time
 
-import numpy as np
+import joblib
 import pandas as pd
 
 from forecast import config as C
-from forecast.data import pull_weather_history
+from forecast.data import OM_PREVIOUS_RUNS_URL, _pull_history_one, blend_models
 from forecast.features import build_features, feature_columns, modeling_rows
 from forecast.models import fit_models, predict
 
 HOURLY = f"{C.DATA_DIR}/hourly.csv"
-BLEND_CACHE = f"{C.DATA_DIR}/weather_blend.csv"
 WEATHER_COLS = list(C.WEATHER_VARS.values())
+SPREAD_COLS = ["temp_spread", "cloud_spread", "ghi_spread"]
+# Open-Meteo has renamed some model ids over time; the first one that returns data is used.
+ADDITIONS = {
+    "hrrr": ["ncep_hrrr_conus", "gfs_hrrr"],
+    "nbm": ["ncep_nbm_conus", "ncep_nbm"],
+}
+
+
+def model_frame(model_id, start, end):
+    """One weather model's archived day-ahead forecast, cached on disk."""
+    path = f"{C.DATA_DIR}/wx_{model_id}.csv"
+    if os.path.exists(path):
+        f = pd.read_csv(path, index_col=0)
+        f.index = pd.to_datetime(f.index, utc=True)
+        return f
+    print(f"  downloading {model_id} ...")
+    f = _pull_history_one(OM_PREVIOUS_RUNS_URL, "_previous_day1", start, end, model_id)
+    f.to_csv(path)
+    return f
+
+
+def get_models(ids, start, end):
+    frames, used = [], []
+    for m in ids:
+        try:
+            f = model_frame(m, start, end)
+        except Exception as e:
+            print(f"  {m}: failed ({str(e)[:100]}), skipped")
+            continue
+        if f["temp_c"].notna().mean() > 0.5:
+            frames.append(f)
+            used.append(m)
+        else:
+            print(f"  {m}: mostly empty, skipped")
+    return frames, used
+
+
+def first_working(aliases, start, end):
+    for m in aliases:
+        frames, used = get_models([m], start, end)
+        if frames:
+            return frames[0], used[0]
+    return None, None
 
 
 def backtest(hourly, start, end):
@@ -51,29 +98,50 @@ def score(bt):
     return ape.mean(), peak, ape.groupby(bt["block"]).mean()
 
 
+def with_weather(base, wx):
+    drop = [c for c in WEATHER_COLS + SPREAD_COLS if c in base.columns]
+    return base.drop(columns=drop).join(wx, how="left")
+
+
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--add", choices=sorted(ADDITIONS), default=None,
+                    help="test the current blend plus one more weather model")
+    args = ap.parse_args()
     t0 = time.time()
-    single = pd.read_csv(HOURLY, index_col="period_utc")
-    single.index = pd.to_datetime(single.index, utc=True)
-    start = single.index.min().strftime("%Y-%m-%d")
-    end = single.index.max().strftime("%Y-%m-%d")
 
-    if os.path.exists(BLEND_CACHE):
-        wx = pd.read_csv(BLEND_CACHE, index_col=0)
-        wx.index = pd.to_datetime(wx.index, utc=True)
-        print(f"Using cached blended weather ({BLEND_CACHE}).")
-    else:
-        print(f"Pulling blended weather {start} to {end} "
-              f"({', '.join(C.BLEND_MODELS)}); this takes a few minutes...")
-        wx = pull_weather_history(start, end, mode="forecast", models=C.BLEND_MODELS)
-        wx.to_csv(BLEND_CACHE)
-    if "temp_spread" not in wx.columns:
-        print("Only one weather model came back, so there is nothing to compare. Keep the single model.")
+    base = pd.read_csv(HOURLY, index_col="period_utc")
+    base.index = pd.to_datetime(base.index, utc=True)
+    start = base.index.min().strftime("%Y-%m-%d")
+    end = base.index.max().strftime("%Y-%m-%d")
+
+    bundle_path = f"{C.MODEL_DIR}/bundle.pkl"
+    current = (joblib.load(bundle_path).get("weather_models") if os.path.exists(bundle_path)
+               else None) or C.BLEND_MODELS
+
+    print("Weather models in the current blend:")
+    frames, used = get_models(current, start, end)
+    if not frames:
+        print("Could not download any current weather model. Check the internet connection.")
         return
+    print(f"  using: {', '.join(used)}")
 
-    blend = single.drop(columns=[c for c in WEATHER_COLS if c in single.columns]).join(wx, how="left")
+    extra_id = None
+    if args.add is None:
+        label_a, label_b = "single weather model", f"blend of {len(used)} models"
+        a_wx, b_wx = frames[0], blend_models(frames)
+    else:
+        extra, extra_id = first_working(ADDITIONS[args.add], start, end)
+        if extra is None:
+            print(f"None of {ADDITIONS[args.add]} returned data, so there is nothing to test. "
+                  "Keep the current setup.")
+            return
+        print(f"  candidate adds: {extra_id}")
+        label_a, label_b = f"current blend ({len(used)})", f"blend + {args.add.upper()}"
+        a_wx, b_wx = blend_models(frames), blend_models(frames + [extra])
 
-    last = modeling_rows(build_features(single))["target_date"].max()
+    a_hourly, b_hourly = with_weather(base, a_wx), with_weather(base, b_wx)
+    last = modeling_rows(build_features(base))["target_date"].max()
     years = {
         "Earlier year": (last - pd.Timedelta(days=729), last - pd.Timedelta(days=365)),
         "Recent year": (last - pd.Timedelta(days=364), last),
@@ -82,22 +150,21 @@ def main():
     print()
     for name, (s, e) in years.items():
         print(f"{name} ({s:%b %Y} - {e:%b %Y}): backtesting both versions...")
-        a_m, a_p, a_blk = score(backtest(single, s, e))
-        b_m, b_p, b_blk = score(backtest(blend, s, e))
+        a_m, a_p, a_blk = score(backtest(a_hourly, s, e))
+        b_m, b_p, b_blk = score(backtest(b_hourly, s, e))
         months = int((b_blk < a_blk).sum())
         ok = (b_m < a_m) and (months > len(a_blk) / 2)
         passed &= ok
-        print(f"  single weather model : {a_m:.2f}% hourly error, {a_p:.2f}% daily-peak error")
-        print(f"  blended weather      : {b_m:.2f}% hourly error, {b_p:.2f}% daily-peak error")
-        print(f"  blend better in {months} of {len(a_blk)} months -> {'PASS' if ok else 'FAIL'}\n")
+        print(f"  {label_a:22s}: {a_m:.2f}% hourly error, {a_p:.2f}% daily-peak error")
+        print(f"  {label_b:22s}: {b_m:.2f}% hourly error, {b_p:.2f}% daily-peak error")
+        print(f"  candidate better in {months} of {len(a_blk)} months -> {'PASS' if ok else 'FAIL'}\n")
 
     print("=" * 60)
     if passed:
-        print("VERDICT: PASS. The blend helps in both years. Switch it on with:")
-        print("    python train_dayahead.py --weather-blend")
+        models = used + ([extra_id] if extra_id else [])
+        print(f"VERDICT: PASS. Send this result to Claude before switching. Models: {', '.join(models)}")
     else:
-        print("VERDICT: FAIL. The blend did not help consistently. Keep the current model;")
-        print("no further action needed.")
+        print("VERDICT: FAIL. Keep the current setup; no further action needed.")
     print(f"(finished in {(time.time() - t0) / 60:.1f} minutes)")
 
 

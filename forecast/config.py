@@ -46,6 +46,10 @@ WEATHER_VARS = {
     "shortwave_radiation": "ghi_wm2",
 }
 
+# Bump this whenever the forecasting METHOD changes (not for routine retrains),
+# so the live track record can score each version separately.
+MODEL_VERSION = "v3: 4-model weather blend + daily-peak model"
+
 # Weather models blended when the blend is switched on (train_dayahead.py
 # --weather-blend). Each is requested separately so one model failing never
 # stops a forecast. Chosen in advance: the four main global models.

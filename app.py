@@ -369,6 +369,26 @@ def page_track_record():
     st.markdown("Every forecast is saved before the day it predicts. Once actual demand comes in, "
                 "it's scored here alongside ISO-NE's own day-ahead forecast.")
     log = load("forecast_log.csv")
+    if log is not None and not log.empty:
+        # Forecasts made before versioning: the model trained through Oct 6 used a
+        # single weather model; later ones used the 4-model blend + peak model.
+        inferred = np.where(log["models_trained_through"].astype(str) <= "2026-10-06",
+                            "v2: single weather model",
+                            "v3: 4-model weather blend + daily-peak model")
+        if "model_version" in log:
+            log["model_version"] = log["model_version"].fillna(pd.Series(inferred, index=log.index))
+        else:
+            log["model_version"] = inferred
+        versions = sorted(log["model_version"].unique(), reverse=True)
+        if len(versions) > 1:
+            pick_v = st.radio("Model version", ["All versions"] + versions, index=1,
+                              horizontal=True, key="track_version")
+            if pick_v != "All versions":
+                log = log[log["model_version"] == pick_v]
+            first = log["target_date"].min()
+            st.caption(f"Scoring {'all forecasts' if pick_v == 'All versions' else pick_v}"
+                       f"{'' if pick_v == 'All versions' else f', in use since {first:%B %-d}'}. "
+                       "Each version is scored only on days it actually forecast.")
     scored = log[log[TARGET].notna()] if log is not None else pd.DataFrame()
     if scored.empty:
         msg = "No scored days yet. Each forecast is checked against actual demand the day after it covers."

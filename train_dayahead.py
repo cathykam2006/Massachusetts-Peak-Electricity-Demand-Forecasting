@@ -104,6 +104,7 @@ def main():
         "weather_models": weather_models if "temp_spread" in hourly.columns else None,
         "feature_cols": cols,
         "trained_through": str(rows["target_date"].max().date()),
+        "model_version": C.MODEL_VERSION,
         "fallback_calibration": {"bias": fallback[0], "q": fallback[1]},
         "config": {k: getattr(C, k) for k in dir(C) if k.isupper()},
     }

@@ -108,6 +108,15 @@ def main():
         tom[["ts_local", "target_date", "iso_forecast_mw"]].join(raw), bias, q)
     out["issued_at"] = now_local.isoformat(timespec="minutes")
     out["models_trained_through"] = bundle["trained_through"]
+    # Which method made this forecast (bundles from before versioning were the
+    # blend + peak model if they carry weather_models, else the earlier model)
+    out["model_version"] = bundle.get("model_version") or (
+        C.MODEL_VERSION if bundle.get("weather_models") else "v2: single weather model")
+    # Keep the weather inputs this forecast used, so live misses can be traced
+    # to the weather forecast versus the model
+    for c in ["temp_c", "cloud_pct", "ghi_wm2", "temp_spread", "cloud_spread", "ghi_spread"]:
+        if c in tom.columns:
+            out[f"wx_{c}"] = tom[c]
     out[C.TARGET] = np.nan
     out.index.name = "period_utc"
 
