@@ -53,7 +53,10 @@ def main():
           f"{demand.last_valid_index().tz_convert(C.TZ):%Y-%m-%d %H:%M}")
 
     # Hourly grid running through the end of tomorrow (local)
-    grid_end = (tomorrow + pd.Timedelta(days=1, hours=1)).tz_localize(C.TZ).tz_convert("UTC")
+    # End the grid at local midnight two days out. Midnight always exists exactly
+    # once in New England, unlike 1-2 AM on the night clocks fall back (which
+    # crashed the Oct 30, 2026 run forecasting the day before Nov 1).
+    grid_end = (tomorrow + pd.Timedelta(days=2)).tz_localize(C.TZ).tz_convert("UTC")
     grid = pd.date_range(demand.index.min(), grid_end, freq="h", tz="UTC")
     hourly = pd.DataFrame({C.TARGET: demand.reindex(grid)}, index=grid)
     hourly["iso_forecast_mw"] = iso_df.reindex(grid)
