@@ -1,7 +1,7 @@
 """
 forecast_tomorrow.py — issue tomorrow's 24-hour forecast, like an operator would.
 
-Run each morning (a GitHub Action does this automatically at ~10:30 AM ET):
+Run each morning (a GitHub Action does this automatically at 15:30 UTC: 10:30 AM EST / 11:30 AM EDT):
     export EIA_API_KEY="your_key_here"
     python forecast_tomorrow.py
 

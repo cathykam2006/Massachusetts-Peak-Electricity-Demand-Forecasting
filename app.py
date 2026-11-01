@@ -706,7 +706,10 @@ def page_supply():
                  f"natural gas covered {peak['Natural gas'] / pk_total * 100:.0f}% of supply.")
     st.markdown(lead)
 
-    long = sel.melt("time", sources, var_name="Source", value_name="MW").dropna()
+    # The November clock change repeats 1 AM; average the two readings so the
+    # stacked chart doesn't pile them on top of each other.
+    chart = sel.groupby("time", as_index=False)[sources].mean()
+    long = chart.melt("time", sources, var_name="Source", value_name="MW").dropna()
     long["MW"] = long["MW"].clip(lower=0)   # storage charging / net exports are not supply
     long["order"] = long["Source"].map({s: i for i, s in enumerate(SUPPLY_ORDER)})
     color = alt.Color("Source:N", scale=alt.Scale(domain=SUPPLY_ORDER, range=SUPPLY_COLORS),
@@ -821,7 +824,7 @@ st.sidebar.radio("Planning risk: how often the actual peak may go above the plan
                  list(RISK_LEVELS), index=1, key="risk")
 st.sidebar.markdown("**🟢 Live data, updated automatically every morning**")
 st.sidebar.caption(
-    "Each day at about 10:30 AM ET, an automated job pulls the latest grid data from the "
+    "Each morning (10:30 AM ET in winter, 11:30 AM in summer), an automated job pulls the latest grid data from the "
     "U.S. Energy Information Administration and weather forecasts from Open-Meteo, issues "
     "a new forecast, and refreshes this app. No manual updates.")
 for line in data_freshness():

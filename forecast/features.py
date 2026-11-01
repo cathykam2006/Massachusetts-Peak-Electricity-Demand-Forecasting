@@ -88,9 +88,15 @@ def build_features(hourly):
     # --- Demand history (only what's observed by the forecast origin) ----
     y = df[C.TARGET]
     # Positional shifts are exact time shifts because the grid is complete.
-    df["load_same_hour_d2"] = y.shift(48)
-    df["load_same_hour_d7"] = y.shift(168)
-    df["load_same_hour_d14"] = y.shift(336)
+    # "Same hour N days ago" by the local clock, not "N x 24 hours ago": across a
+    # daylight-saving change, 48 hours back lands an hour off (e.g. 5 PM instead of
+    # 6 PM for two days after the March change; the 7- and 14-day lags were off for
+    # up to two weeks). The repeated 1 AM in November uses its first occurrence.
+    wall = local.tz_localize(None)
+    by_wall = pd.Series(y.values, index=wall)
+    by_wall = by_wall[~by_wall.index.duplicated(keep="first")]
+    for n in (2, 7, 14):
+        df[f"load_same_hour_d{n}"] = by_wall.reindex(wall - pd.Timedelta(days=n)).values
 
     by_day = y.groupby(date)
     d_stats = pd.DataFrame({"peak": by_day.max(), "mean": by_day.mean()})
