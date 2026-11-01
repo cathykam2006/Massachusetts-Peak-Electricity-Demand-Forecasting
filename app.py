@@ -57,11 +57,19 @@ def _local_naive(series):
     return pd.to_datetime(series, utc=True).dt.tz_convert(TZ).dt.tz_localize(None)
 
 
-@st.cache_data(ttl=3600)
 def load(name):
+    """Read a data file. The cache is keyed on the file's modification time, so
+    when the daily job commits a new forecast the app shows it right away
+    (a fixed one-hour cache once showed yesterday's forecast as stale)."""
     path = f"{DATA}/{name}"
     if not os.path.exists(path):
         return None
+    return _load_file(name, os.path.getmtime(path))
+
+
+@st.cache_data
+def _load_file(name, mtime):
+    path = f"{DATA}/{name}"
     if name.endswith(".json"):
         with open(path) as f:
             return json.load(f)
@@ -192,8 +200,26 @@ PLAN_WINDOW_DAYS = 90   # recent days used to size the margin
 MIN_PLAN_DAYS = 30      # need at least this many before trusting the margin
 
 
-@st.cache_data(ttl=3600)
+def _data_version():
+    """Modification times of the files the planning-buffer math is built from."""
+    return tuple(os.path.getmtime(f"{DATA}/{n}") if os.path.exists(f"{DATA}/{n}") else 0
+                 for n in ("backtest.csv", "forecast_log.csv"))
+
+
 def daily_peak_history():
+    return _daily_peak_history(_data_version())
+
+
+def plan_replay(risk):
+    return _plan_replay(risk, _data_version())
+
+
+def plan_backtest(risk):
+    return _plan_backtest(risk, _data_version())
+
+
+@st.cache_data
+def _daily_peak_history(version):
     """Complete days from the backtest and the scored live log: actual peak,
     expected peak, and the raw plan base (highest uncalibrated P90 hour)."""
     parts = []
@@ -236,8 +262,8 @@ def _apply_updates(alpha, pending, day, risk):
     return alpha
 
 
-@st.cache_data(ttl=3600)
-def plan_replay(risk):
+@st.cache_data
+def _plan_replay(risk, version):
     """Replay the planning rule day by day through history, out of sample."""
     hist = daily_peak_history()
     if hist is None:
@@ -256,8 +282,8 @@ def plan_replay(risk):
             "alpha": alpha, "pending": pending}
 
 
-@st.cache_data(ttl=3600)
-def plan_backtest(risk):
+@st.cache_data
+def _plan_backtest(risk, version):
     rep = plan_replay(risk)
     if rep is None or rep["daily"] is None:
         return None
