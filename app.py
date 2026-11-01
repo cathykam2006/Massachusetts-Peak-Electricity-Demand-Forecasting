@@ -307,6 +307,13 @@ def page_tomorrow():
         st.info("No forecast has been issued yet. Run `python forecast_tomorrow.py`, "
                 "or open the repo's Actions tab and run **Daily day-ahead forecast**.")
         return
+    # Say so plainly if the daily job didn't run, instead of passing off an old
+    # forecast as tomorrow's
+    fc_day = pd.Timestamp(lf["target_date"].iloc[0]).date()
+    today_et = pd.Timestamp.now(tz=TZ).date()
+    if fc_day <= today_et:
+        st.warning(f"This forecast is for {fc_day:%B %-d}, so it is out of date: today's automatic "
+                   "update hasn't run yet or failed. It will refresh on the next successful run.")
     peak = lf.loc[lf["pred"].idxmax()]
     t = peak["time"]
     st.title(f"{t:%A, %B %-d}: New England demand peaks near "
@@ -645,6 +652,10 @@ def page_supply():
                 "daily GitHub Action run) to pull generation by source from EIA.")
         return
     sources = [c for c in SUPPLY_ORDER if c in sup.columns]
+    age = pd.Timestamp.now(tz=TZ).tz_localize(None) - sup["time"].max()
+    if age > pd.Timedelta(days=3):
+        st.warning(f"Supply data last updated {sup['time'].max():%B %-d}; the automatic refresh "
+                   "hasn't succeeded since.")
     last = sup["time"].max().normalize()
     first = sup["time"].min().normalize()
     default = max(first, last - pd.Timedelta(days=6))

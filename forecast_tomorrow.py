@@ -65,6 +65,13 @@ def main():
     # 2. Features + raw prediction ---------------------------------------
     feat = build_features(hourly)
     tom = feat[feat["target_date"] == tomorrow].copy()
+    # If an input is unavailable (e.g. only one weather model answered, so there is
+    # no model-disagreement column), forecast with it blank rather than crash; the
+    # model handles blanks, and the log records what was missing.
+    absent = [c for c in bundle["feature_cols"] if c not in tom.columns]
+    if absent:
+        print(f"  WARNING: inputs unavailable today, forecasting without them: {', '.join(absent)}")
+        tom = tom.reindex(columns=list(tom.columns) + absent)
     missing = tom[bundle["feature_cols"]].isna().mean()
     if (missing > 0).any():
         print("  note — features with missing values (model handles NaN):\n"
@@ -122,6 +129,23 @@ def main():
             out[f"wx_{c}"] = tom[c]
     out[C.TARGET] = np.nan
     out.index.name = "period_utc"
+
+    # What this forecast was built from, so a weak day can be traced afterwards
+    out["weather_models_used"] = len(wx.attrs.get("models_used", [])) or np.nan
+    out["latest_demand_obs"] = demand.last_valid_index().tz_convert(C.TZ).isoformat(timespec="minutes")
+
+    # Sanity check BEFORE saving: a broken forecast is worse than none, because the
+    # app would show it as real. Stop instead, leaving yesterday's files untouched.
+    problems = []
+    if len(out) < 23:
+        problems.append(f"only {len(out)} hours")
+    if out[["pred", "pred_lo", "pred_hi"]].isna().any().any():
+        problems.append("blank values")
+    elif not out["pred"].between(C.DEMAND_MIN_MW, C.DEMAND_MAX_MW).all():
+        problems.append(f"values outside {C.DEMAND_MIN_MW:,}-{C.DEMAND_MAX_MW:,} MW")
+    if problems:
+        raise SystemExit("Forecast failed its sanity check (" + "; ".join(problems) +
+                         "). Nothing was saved.")
 
     # 4. Save -------------------------------------------------------------
     os.makedirs(C.DATA_DIR, exist_ok=True)

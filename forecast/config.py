@@ -71,6 +71,10 @@ DEMAND_MIN_MW, DEMAND_MAX_MW = 6_000, 30_000
 # Flag single-hour spikes that deviate this much from a centered 5-hour median.
 SPIKE_TOLERANCE = 0.20
 
+# A retrained model must score at or below this on the last four unseen weeks
+# before it replaces the deployed one (normal is about 3-4%).
+MAX_HOLDOUT_MAPE = 6.0
+
 # --- Backtest --------------------------------------------------------------
 BACKTEST_DAYS = 365      # evaluate on the most recent year (all four seasons)
 RETRAIN_EVERY_DAYS = 28  # refit cadence inside the backtest

@@ -87,7 +87,6 @@ def main():
     else:
         hourly = build_hourly_frame(args.start, args.end, api_key, weather_mode=args.weather,
                                     weather_models=weather_models)
-    hourly.to_csv(f"{C.DATA_DIR}/hourly{suffix}.csv")
     print(f"Hourly frame: {hourly.shape}, {hourly[C.TARGET].isna().mean():.1%} target missing")
 
     feat = build_features(hourly)
@@ -115,10 +114,26 @@ def main():
                        "weather_mode": args.weather}, f, indent=2)
 
     if args.weather == "archive":
+        hourly.to_csv(f"{C.DATA_DIR}/hourly{suffix}.csv")
         print("\nPerfect-weather run: skipping final model (not deployable).")
         return
 
     # 3. Final models on all data ----------------------------------------
+    # Safety check before replacing the deployed model: train the same way on data
+    # up to four weeks ago and score it on the last four weeks it hasn't seen. If it
+    # does badly (normal is about 3-4%), keep the current model.
+    cutoff = rows["target_date"].max() - pd.Timedelta(days=28)
+    hold = rows[rows["target_date"] > cutoff]
+    trial = fit_models(rows.loc[rows["target_date"] <= cutoff - pd.Timedelta(days=1), cols],
+                       rows.loc[rows["target_date"] <= cutoff - pd.Timedelta(days=1), C.TARGET])
+    from forecast.models import predict
+    hp = predict(trial, hold[cols])["pred"]
+    hold_mape = float(((hp - hold[C.TARGET]).abs() / hold[C.TARGET]).mean() * 100)
+    print(f"Safety check: error on the last 4 weeks (unseen) = {hold_mape:.2f}% "
+          f"(limit {C.MAX_HOLDOUT_MAPE:.0f}%)")
+    if not np.isfinite(hold_mape) or hold_mape > C.MAX_HOLDOUT_MAPE:
+        raise SystemExit("New model failed the safety check; the current model was left in place.")
+
     print("\nFitting final models on all available data...")
     models = fit_models(rows[cols], rows[C.TARGET])
     bundle = {
@@ -131,6 +146,7 @@ def main():
         "config": {k: getattr(C, k) for k in dir(C) if k.isupper()},
     }
     joblib.dump(bundle, f"{C.MODEL_DIR}/bundle.pkl")
+    hourly.to_csv(f"{C.DATA_DIR}/hourly{suffix}.csv")   # saved only once the model passed
 
     # 4. SHAP (explainability for the app) -------------------------------
     try:

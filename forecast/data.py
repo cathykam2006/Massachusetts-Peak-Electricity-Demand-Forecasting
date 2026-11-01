@@ -262,10 +262,14 @@ def pull_weather_live(past_days=8, forecast_days=3, models=None):
         frames, used = _try_models(lambda m: _pull_live_one(past_days, forecast_days, m), models)
         if frames:
             if len(used) < len(models):
-                print(f"  note: live blend uses {len(used)} of {len(models)} weather models")
-            return blend_models(frames)
-        print("  no blended model succeeded; using the default single model")
-    return _pull_live_one(past_days, forecast_days)
+                print(f"  WARNING: live blend uses {len(used)} of {len(models)} weather models")
+            wx = blend_models(frames)
+            wx.attrs["models_used"] = used
+            return wx
+        print("  WARNING: no blended model succeeded; using the default single model")
+    wx = _pull_live_one(past_days, forecast_days)
+    wx.attrs["models_used"] = ["default"]
+    return wx
 
 
 # ---------------------------------------------------------------------------

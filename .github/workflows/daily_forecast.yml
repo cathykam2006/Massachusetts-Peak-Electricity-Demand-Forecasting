@@ -10,12 +10,18 @@ on:
 permissions:
   contents: write
 
+# The daily forecast and the monthly retrain both push to this repo; run them one
+# at a time so neither push is rejected.
+concurrency:
+  group: repo-writes
+  cancel-in-progress: false
+
 jobs:
   forecast:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -36,4 +42,5 @@ jobs:
           git add data/dayahead/latest_forecast.csv data/dayahead/forecast_log.csv
           git add data/dayahead/supply.csv 2>/dev/null || true
           git diff --cached --quiet || git commit -m "Day-ahead forecast $(date -u +%F)"
-          git push
+          git pull --rebase --autostash || true
+          git push || (sleep 15 && git pull --rebase --autostash && git push)
