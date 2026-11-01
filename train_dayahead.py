@@ -45,6 +45,8 @@ def main():
                     help="blend several weather models (run compare_weather.py first)")
     ap.add_argument("--no-weather-blend", action="store_true",
                     help="switch back to the single default weather model")
+    ap.add_argument("--full-refresh", action="store_true",
+                    help="re-download all history instead of only the recent days")
     args = ap.parse_args()
 
     api_key = os.environ.get("EIA_API_KEY")
@@ -63,8 +65,28 @@ def main():
     elif not args.no_weather_blend and os.path.exists(f"{C.MODEL_DIR}/bundle.pkl"):
         weather_models = joblib.load(f"{C.MODEL_DIR}/bundle.pkl").get("weather_models")
     print(f"Weather: {'blend of ' + ', '.join(weather_models) if weather_models else 'single default model'}")
-    hourly = build_hourly_frame(args.start, args.end, api_key, weather_mode=args.weather,
-                                weather_models=weather_models)
+    # Incremental refresh: past weather forecasts never change, so reuse the saved
+    # history and download only the last few weeks. Re-downloading ~3 years of four
+    # weather models every month timed out on GitHub's servers (Nov 1, 2026).
+    path = f"{C.DATA_DIR}/hourly{suffix}.csv"
+    old = None
+    if os.path.exists(path) and not args.full_refresh:
+        old = pd.read_csv(path, index_col="period_utc")
+        old.index = pd.to_datetime(old.index, utc=True)
+        same_setup = ("temp_spread" in old.columns) == bool(weather_models)
+        if not same_setup or old.index.min() > pd.Timestamp(args.start, tz="UTC") + pd.Timedelta(days=1):
+            print("Saved history doesn't match this setup; doing a full refresh.")
+            old = None
+    if old is not None:
+        pull_start = (old.index.max() - pd.Timedelta(days=14)).strftime("%Y-%m-%d")
+        print(f"Reusing saved history through {old.index.max():%Y-%m-%d}; downloading from {pull_start}.")
+        new = build_hourly_frame(pull_start, args.end, api_key, weather_mode=args.weather,
+                                 weather_models=weather_models)
+        hourly = pd.concat([old[old.index < new.index.min()], new])
+        hourly = hourly[~hourly.index.duplicated(keep="last")].sort_index()
+    else:
+        hourly = build_hourly_frame(args.start, args.end, api_key, weather_mode=args.weather,
+                                    weather_models=weather_models)
     hourly.to_csv(f"{C.DATA_DIR}/hourly{suffix}.csv")
     print(f"Hourly frame: {hourly.shape}, {hourly[C.TARGET].isna().mean():.1%} target missing")
 

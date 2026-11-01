@@ -35,8 +35,13 @@ def _get(url, params, retries=5):
     """
     last_problem = ""
     for attempt in range(retries):
-        r = requests.get(url, params=params, timeout=180)
-        if r.status_code in (429, 500, 502, 503, 504):
+        try:
+            r = requests.get(url, params=params, timeout=180)
+        except requests.exceptions.RequestException as e:   # timeouts, dropped connections
+            r, last_problem = None, f"{type(e).__name__}: {str(e)[:200]}"
+        if r is None:
+            pass
+        elif r.status_code in (429, 500, 502, 503, 504):
             last_problem = f"HTTP {r.status_code}: {r.text[:300]}"
         elif r.status_code >= 400:
             raise RuntimeError(
@@ -228,10 +233,14 @@ def pull_weather_history(start, end, mode="forecast", models=None):
 
     if models and mode == "forecast":
         frames, used = _try_models(lambda m: _pull_history_one(url, suffix, start, end, m), models)
-        if frames:
-            print(f"  blended weather models: {', '.join(used)}")
-            return blend_models(frames)
-        print("  no blended model succeeded; using the default single model")
+        # Training data defines the model, so it must use exactly the tested weather
+        # setup. Stop rather than silently train on fewer (or no) weather models.
+        if len(used) < len(models):
+            missing = [m for m in models if m not in used]
+            raise RuntimeError(f"Weather download failed for {', '.join(missing)}; "
+                               "stopping so the deployed model is left unchanged. Try again later.")
+        print(f"  blended weather models: {', '.join(used)}")
+        return blend_models(frames)
     return _pull_history_one(url, suffix, start, end)
 
 
