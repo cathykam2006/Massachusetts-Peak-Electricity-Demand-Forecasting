@@ -3,8 +3,14 @@
 name: Daily day-ahead forecast
 
 on:
+  # GitHub often starts scheduled jobs hours late or skips them (on Nov 2 the run
+  # started 7.5 hours late; on Nov 3 it hadn't started 4 hours after its slot).
+  # Three back-up slots; whichever runs first issues the forecast and the rest
+  # see it is already done and stop. All are after 10:30 AM local year-round.
   schedule:
-    - cron: "30 15 * * *"   # 15:30 UTC = 11:30 AM EDT / 10:30 AM EST, so never before 10:30 local
+    - cron: "41 15 * * *"   # 10:41 AM EST / 11:41 AM EDT
+    - cron: "17 17 * * *"   # back-up
+    - cron: "53 19 * * *"   # back-up
   workflow_dispatch:         # lets you run it manually from the Actions tab
 
 permissions:
@@ -21,21 +27,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - name: Already issued today?
+        id: check
+        run: |
+          tomorrow=$(TZ=America/New_York date -d tomorrow +%F)
+          if [ "${{ github.event_name }}" = "schedule" ] && grep -q ",$tomorrow," data/dayahead/latest_forecast.csv; then
+            echo "Forecast for $tomorrow is already published; nothing to do."
+            echo "done=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.check.outputs.done != 'true'
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt
-      - name: Issue forecast
+      - if: steps.check.outputs.done != 'true'
+        run: pip install -r requirements.txt
+      - if: steps.check.outputs.done != 'true'
+        name: Issue forecast
         env:
           EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
         run: python forecast_tomorrow.py
-      - name: Update supply mix
+      - if: steps.check.outputs.done != 'true'
+        name: Update supply mix
         continue-on-error: true      # never block the forecast commit
         env:
           EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
         run: python update_supply.py
-      - name: Commit forecast
+      - if: steps.check.outputs.done != 'true'
+        name: Commit forecast
         run: |
           git config user.name "forecast-bot"
           git config user.email "actions@github.com"

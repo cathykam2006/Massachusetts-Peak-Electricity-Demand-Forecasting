@@ -1,14 +1,16 @@
 name: Keep app awake
 
 on:
+  # The app sleeps after ~12 hours without visits. GitHub often starts scheduled
+  # jobs hours late, so visit every 2 hours to leave plenty of margin.
   schedule:
-    - cron: "17 */4 * * *"   # every 4 hours; the app sleeps after ~12 hours without visits
+    - cron: "23 */2 * * *"
   workflow_dispatch:
 
 jobs:
   visit:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -16,3 +18,9 @@ jobs:
           python-version: "3.12"
       - run: pip install playwright && python -m playwright install --with-deps chromium
       - run: python scripts/keep_awake.py
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keep-awake-screenshot
+          path: keep_awake_failure.png
+          if-no-files-found: ignore
