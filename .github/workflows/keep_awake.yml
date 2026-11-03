@@ -10,17 +10,11 @@ on:
 jobs:
   visit:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install playwright && python -m playwright install --with-deps chromium
+      - uses: actions/checkout@v5
       - run: python scripts/keep_awake.py
-      - if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: keep-awake-screenshot
-          path: keep_awake_failure.png
-          if-no-files-found: ignore
