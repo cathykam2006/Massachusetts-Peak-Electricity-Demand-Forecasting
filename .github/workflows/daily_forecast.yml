@@ -3,14 +3,12 @@
 name: Daily day-ahead forecast
 
 on:
-  # GitHub often starts scheduled jobs hours late or skips them (on Nov 2 the run
-  # started 7.5 hours late; on Nov 3 it hadn't started 4 hours after its slot).
-  # Three back-up slots; whichever runs first issues the forecast and the rest
-  # see it is already done and stop. All are after 10:30 AM local year-round.
+  # GitHub starts scheduled jobs hours late or drops them altogether (Nov 3 and
+  # Nov 4 never started). So there is a slot every hour from late morning to
+  # evening ET: the first one GitHub actually runs issues the forecast, and the
+  # rest see it is already published and stop within seconds.
   schedule:
-    - cron: "41 15 * * *"   # 10:41 AM EST / 11:41 AM EDT
-    - cron: "17 17 * * *"   # back-up
-    - cron: "53 19 * * *"   # back-up
+    - cron: "41 15-23 * * *"   # 10:41 AM - 6:41 PM EST / 11:41 AM - 7:41 PM EDT
   workflow_dispatch:         # lets you run it manually from the Actions tab
 
 permissions:
