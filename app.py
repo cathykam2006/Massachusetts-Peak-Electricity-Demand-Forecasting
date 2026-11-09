@@ -334,12 +334,18 @@ def page_tomorrow():
                 "or open the repo's Actions tab and run **Daily day-ahead forecast**.")
         return
     # Say so plainly if the daily job didn't run, instead of passing off an old
-    # forecast as tomorrow's
+    # forecast as tomorrow's. Between midnight and the morning run, the newest
+    # forecast is for today, which is expected, not a missed update: only warn
+    # once the day's last back-up slot (about 8 PM ET) has passed without a run.
     fc_day = pd.Timestamp(lf["target_date"].iloc[0]).date()
-    today_et = pd.Timestamp.now(tz=TZ).date()
-    if fc_day <= today_et:
+    now_et = pd.Timestamp.now(tz=TZ)
+    today_et = now_et.date()
+    if fc_day < today_et or (fc_day == today_et and now_et.hour >= 20):
         st.warning(f"This forecast is for {fc_day:%B %-d}, so it is out of date: today's automatic "
                    "update hasn't run yet or failed. It will refresh on the next successful run.")
+    elif fc_day == today_et:
+        st.caption(f"Showing today's forecast. Tomorrow's is issued late each morning "
+                   "(around 10:30-11:30 AM ET).")
     peak = lf.loc[lf["pred"].idxmax()]
     t = peak["time"]
     st.title(f"{t:%A, %B %-d}: New England demand peaks near "
