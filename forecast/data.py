@@ -287,6 +287,31 @@ def pull_weather_live(past_days=8, forecast_days=3, models=None, lead=None):
     return wx
 
 
+def pull_fresh_weather(target_date):
+    """Tomorrow's weather from this morning's runs (see C.FRESH_RUNS). Returns a
+    blended frame for the target day's hours, or None if no run is available."""
+    run_day = pd.Timestamp(target_date) - pd.Timedelta(days=1)
+    frames, used = [], []
+    for model, run_h in C.FRESH_RUNS.items():
+        try:
+            payload = _get(C.SINGLE_RUNS_URL, {**_coord_params(), "hourly": ",".join(C.WEATHER_VARS),
+                                               "models": model, "forecast_days": 3,
+                                               "run": f"{run_day:%Y-%m-%d}T{run_h:02d}:00"}, retries=3)
+        except Exception as e:
+            print(f"  fresh weather: {model} {run_h:02d}z not available ({str(e)[:80]})")
+            continue
+        f = _weighted_frame(payload)
+        f = f[f.index.tz_convert(C.TZ).tz_localize(None).normalize() == pd.Timestamp(target_date)]
+        if f["temp_c"].notna().sum() >= 20:
+            frames.append(f)
+            used.append(f"{model} {run_h:02d}z")
+    if not frames:
+        return None
+    wx = blend_models(frames) if len(frames) > 1 else frames[0]
+    wx.attrs["models_used"] = used
+    return wx
+
+
 # ---------------------------------------------------------------------------
 # Assemble
 # ---------------------------------------------------------------------------

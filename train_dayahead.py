@@ -149,6 +149,7 @@ def main():
         "trained_through": str(rows["target_date"].max().date()),
         "model_version": C.MODEL_VERSION,
         "weather_lead": C.WEATHER_LEAD,
+        "fresh_weather": True,
         "fallback_calibration": {"bias": fallback[0], "q": fallback[1]},
         "config": {k: getattr(C, k) for k in dir(C) if k.isupper()},
     }

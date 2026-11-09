@@ -48,7 +48,7 @@ WEATHER_VARS = {
 
 # Bump this whenever the forecasting METHOD changes (not for routine retrains),
 # so the live track record can score each version separately.
-MODEL_VERSION = "v4: weather fixed by 10 AM the day before"
+MODEL_VERSION = "v5: fair timing + same-morning weather runs"
 
 # Weather models blended when the blend is switched on (train_dayahead.py
 # --weather-blend). Each is requested separately so one model failing never
@@ -103,3 +103,11 @@ MODEL_DIR = "models/dayahead"
 # by the forecast origin (D-2 and earlier).
 CALIB_WINDOW_DAYS = 28   # look-back for bias and interval calibration
 BIAS_SHRINK = 0.5        # remove half the recent average error (full removal overreacts)
+
+# Freshest weather allowed by ISO-NE's 10 AM day-ahead deadline: for tomorrow's
+# hours, the 06 UTC runs issued this morning (GEM has no 06 UTC run, so 00 UTC).
+# They are published ~5-9 AM ET. The run is named explicitly, so the forecast is
+# the same whatever time GitHub starts the job. Passed a pre-registered test on
+# Nov 9, 2026 (Apr-Nov 2026: hourly error 3.71% -> 3.59%, better in 7 of 8 blocks).
+SINGLE_RUNS_URL = "https://single-runs-api.open-meteo.com/v1/forecast"
+FRESH_RUNS = {"gfs_seamless": 6, "ecmwf_ifs025": 6, "icon_seamless": 6, "gem_seamless": 0}

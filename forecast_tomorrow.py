@@ -23,7 +23,7 @@ import pandas as pd
 
 from forecast import config as C
 from forecast.calibration import apply_calibration, calibration_state
-from forecast.data import clean_demand, pull_eia_series, pull_weather_live
+from forecast.data import clean_demand, pull_eia_series, pull_fresh_weather, pull_weather_live
 from forecast.features import build_features
 from forecast.models import predict
 
@@ -53,6 +53,17 @@ def main():
     wx = pull_weather_live(past_days=4, forecast_days=3,
                            models=bundle.get("weather_models"), lead=bundle.get("weather_lead"))
     print(f"  weather: {bundle.get('weather_lead') or 'newest run (pre-v4 model)'}")
+    # v5+: tomorrow's hours use this morning's runs instead (published before
+    # ISO-NE's 10 AM deadline); falls back to the 48-hour weather if unavailable.
+    if bundle.get("fresh_weather"):
+        fresh = pull_fresh_weather(tomorrow)
+        if fresh is None:
+            print("  fresh weather unavailable; using the 48-hour weather for tomorrow")
+        else:
+            cols = [c for c in fresh.columns if c in wx.columns]
+            idx = fresh.index.intersection(wx.index)
+            wx.loc[idx, cols] = fresh.loc[idx, cols].values
+            print(f"  tomorrow's weather: {', '.join(fresh.attrs['models_used'])}")
     print(f"  latest demand observation: "
           f"{demand.last_valid_index().tz_convert(C.TZ):%Y-%m-%d %H:%M}")
 
