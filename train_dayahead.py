@@ -74,6 +74,12 @@ def main():
         old = pd.read_csv(path, index_col="period_utc")
         old.index = pd.to_datetime(old.index, utc=True)
         same_setup = ("temp_spread" in old.columns) == bool(weather_models)
+        bundle_path = f"{C.MODEL_DIR}/bundle.pkl"
+        old_lead = (joblib.load(bundle_path).get("weather_lead", "_previous_day1")
+                    if os.path.exists(bundle_path) else None)
+        if old_lead != C.WEATHER_LEAD:
+            print(f"Saved history used weather {old_lead}, now {C.WEATHER_LEAD}.")
+            same_setup = False
         if not same_setup or old.index.min() > pd.Timestamp(args.start, tz="UTC") + pd.Timedelta(days=1):
             print("Saved history doesn't match this setup; doing a full refresh.")
             old = None
@@ -142,6 +148,7 @@ def main():
         "feature_cols": cols,
         "trained_through": str(rows["target_date"].max().date()),
         "model_version": C.MODEL_VERSION,
+        "weather_lead": C.WEATHER_LEAD,
         "fallback_calibration": {"bias": fallback[0], "q": fallback[1]},
         "config": {k: getattr(C, k) for k in dir(C) if k.isupper()},
     }

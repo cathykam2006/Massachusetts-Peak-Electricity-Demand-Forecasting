@@ -40,13 +40,13 @@ ADDITIONS = {
 
 def model_frame(model_id, start, end):
     """One weather model's archived day-ahead forecast, cached on disk."""
-    path = f"{C.DATA_DIR}/wx_{model_id}.csv"
+    path = f"{C.DATA_DIR}/wx_{model_id}{C.WEATHER_LEAD}.csv"
     if os.path.exists(path):
         f = pd.read_csv(path, index_col=0)
         f.index = pd.to_datetime(f.index, utc=True)
         return f
     print(f"  downloading {model_id} ...")
-    f = _pull_history_one(OM_PREVIOUS_RUNS_URL, "_previous_day1", start, end, model_id)
+    f = _pull_history_one(OM_PREVIOUS_RUNS_URL, C.WEATHER_LEAD, start, end, model_id)
     f.to_csv(path)
     return f
 

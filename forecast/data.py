@@ -225,7 +225,7 @@ def pull_weather_history(start, end, mode="forecast", models=None):
                 f"Archived day-ahead weather forecasts start {C.PREVIOUS_RUNS_START}; "
                 "use mode='archive' for earlier years (and label results accordingly)."
             )
-        url, suffix = OM_PREVIOUS_RUNS_URL, "_previous_day1"
+        url, suffix = OM_PREVIOUS_RUNS_URL, C.WEATHER_LEAD
     elif mode == "archive":
         url, suffix = OM_ARCHIVE_URL, ""
     else:
@@ -244,22 +244,35 @@ def pull_weather_history(start, end, mode="forecast", models=None):
     return _pull_history_one(url, suffix, start, end)
 
 
-def _pull_live_one(past_days, forecast_days, model=None):
+def _pull_live_one(past_days, forecast_days, model=None, lead=None):
+    """lead=None: the newest forecast run (how models before v4 were run live).
+    Otherwise: live weather from the SAME stored forecasts the model was trained on
+    (C.WEATHER_LEAD), not the newest run. So the live forecast uses only weather
+    known by 10 AM the day before, whatever time GitHub actually runs the job
+    (runs have started anywhere from 10 AM to 6 PM)."""
+    if lead is None:
+        params = {**_coord_params(), "hourly": ",".join(C.WEATHER_VARS),
+                  "past_days": past_days, "forecast_days": forecast_days}
+        if model:
+            params["models"] = model
+        return _weighted_frame(_get(OM_FORECAST_URL, params))
+    today = pd.Timestamp.now(tz="UTC").normalize()
     params = {
         **_coord_params(),
-        "hourly": ",".join(C.WEATHER_VARS),
-        "past_days": past_days, "forecast_days": forecast_days,
+        "hourly": ",".join(v + lead for v in C.WEATHER_VARS),
+        "start_date": (today - pd.Timedelta(days=past_days)).strftime("%Y-%m-%d"),
+        "end_date": (today + pd.Timedelta(days=forecast_days - 1)).strftime("%Y-%m-%d"),
     }
     if model:
         params["models"] = model
-    return _weighted_frame(_get(OM_FORECAST_URL, params))
+    return _weighted_frame(_get(OM_PREVIOUS_RUNS_URL, params), lead)
 
 
-def pull_weather_live(past_days=8, forecast_days=3, models=None):
+def pull_weather_live(past_days=8, forecast_days=3, models=None, lead=None):
     """Current forecast run(s), for the operational (tomorrow) forecast. Uses the
     same model set the deployed model was trained on."""
     if models:
-        frames, used = _try_models(lambda m: _pull_live_one(past_days, forecast_days, m), models)
+        frames, used = _try_models(lambda m: _pull_live_one(past_days, forecast_days, m, lead), models)
         if frames:
             if len(used) < len(models):
                 print(f"  WARNING: live blend uses {len(used)} of {len(models)} weather models")
@@ -267,7 +280,7 @@ def pull_weather_live(past_days=8, forecast_days=3, models=None):
             wx.attrs["models_used"] = used
             return wx
         print("  WARNING: no blended model succeeded; using the default single model")
-    wx = _pull_live_one(past_days, forecast_days)
+    wx = _pull_live_one(past_days, forecast_days, lead=lead)
     wx.attrs["models_used"] = ["default"]
     return wx
 

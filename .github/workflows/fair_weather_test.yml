@@ -1,0 +1,40 @@
+# Temporary test on this branch only: retrain + full backtest with weather fixed
+# by 10 AM the day before, then a live forecast. Nothing is pushed to main.
+name: Fair weather test
+on:
+  push:
+    branches: [fair-weather-test]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: cp data/dayahead/backtest.csv old_backtest.csv; cp data/dayahead/metrics.csv old_metrics.csv
+      - name: Retrain and backtest
+        env:
+          EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
+        run: python train_dayahead.py --full-refresh 2>&1 | tee train_log.txt
+      - name: Live forecast with the new model
+        env:
+          EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
+        run: python forecast_tomorrow.py 2>&1 | tee live_log.txt
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fair-weather-results
+          path: |
+            *_log.txt
+            old_backtest.csv
+            old_metrics.csv
+            data/dayahead/backtest.csv
+            data/dayahead/metrics.csv
+            data/dayahead/season_metrics.csv
+            data/dayahead/hourly.csv
+            data/dayahead/latest_forecast.csv
+            models/dayahead/

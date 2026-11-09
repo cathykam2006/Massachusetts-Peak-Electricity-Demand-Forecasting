@@ -48,7 +48,7 @@ WEATHER_VARS = {
 
 # Bump this whenever the forecasting METHOD changes (not for routine retrains),
 # so the live track record can score each version separately.
-MODEL_VERSION = "v3: 4-model weather blend + daily-peak model"
+MODEL_VERSION = "v4: weather fixed by 10 AM the day before"
 
 # Weather models blended when the blend is switched on (train_dayahead.py
 # --weather-blend). Each is requested separately so one model failing never
@@ -56,9 +56,21 @@ MODEL_VERSION = "v3: 4-model weather blend + daily-peak model"
 BLEND_MODELS = ["gfs_seamless", "ecmwf_ifs025", "icon_seamless", "gem_seamless"]
 
 # The Previous Runs API stores what each weather model predicted N days before
-# the valid time. "previous_day1" ~= a forecast issued the day before, which
-# matches our 14-38 hour lead time. Archive starts January 2024.
+# the valid time. Archive starts January 2024.
 PREVIOUS_RUNS_START = "2024-01-01"
+
+# Which of those stored forecasts the model uses, in training, backtests AND the
+# live forecast. The forecast for day D+1 must use only weather known by about
+# 10 AM ET on day D, when ISO-NE's day-ahead market closes.
+#   "_previous_day1" = predicted 24 h before each hour. For D+1's hours that
+#     means model runs from D's daytime/evening (the 6 PM peak comes from the
+#     ~18 UTC run, out ~7 PM ET on D): later than 10 AM, so it is NOT allowed.
+#     v1-v3 used this, which flattered the backtest.
+#   "_previous_day2" = predicted 48 h before each hour: every value for D+1 comes
+#     from a run initialised by 00 UTC on D, published by ~2 AM ET. Always known
+#     by 10 AM, slightly older than strictly necessary (so, if anything, a
+#     conservative test), and it does not change with the time the job runs.
+WEATHER_LEAD = "_previous_day2"
 
 # Base temperature for heating/cooling degree hours (°C). 18.3 °C = 65 °F,
 # the convention used in U.S. utility load analysis.
