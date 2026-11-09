@@ -23,7 +23,7 @@ import pandas as pd
 
 from forecast import config as C
 from forecast.calibration import apply_calibration, calibration_state
-from forecast.data import clean_demand, pull_eia_series, pull_weather_live
+from forecast.data import clean_demand, pull_eia_series, pull_fresh_weather, pull_weather_live
 from forecast.features import build_features
 from forecast.models import predict
 
@@ -47,8 +47,23 @@ def main():
     # 1. Inputs -----------------------------------------------------------
     demand = clean_demand(pull_eia_series("D", start, end, api_key))
     iso_df = pull_eia_series("DF", start, end, api_key)
+    # Weather exactly as the deployed model was trained on: v4+ bundles record a
+    # fixed lead (only weather known by 10 AM the day before); older ones used the
+    # newest run at whatever time the job happened to start.
     wx = pull_weather_live(past_days=4, forecast_days=3,
-                           models=bundle.get("weather_models"))
+                           models=bundle.get("weather_models"), lead=bundle.get("weather_lead"))
+    print(f"  weather: {bundle.get('weather_lead') or 'newest run (pre-v4 model)'}")
+    # v5+: tomorrow's hours use this morning's runs instead (published before
+    # ISO-NE's 10 AM deadline); falls back to the 48-hour weather if unavailable.
+    if bundle.get("fresh_weather"):
+        fresh = pull_fresh_weather(tomorrow)
+        if fresh is None:
+            print("  fresh weather unavailable; using the 48-hour weather for tomorrow")
+        else:
+            cols = [c for c in fresh.columns if c in wx.columns]
+            idx = fresh.index.intersection(wx.index)
+            wx.loc[idx, cols] = fresh.loc[idx, cols].values
+            print(f"  tomorrow's weather: {', '.join(fresh.attrs['models_used'])}")
     print(f"  latest demand observation: "
           f"{demand.last_valid_index().tz_convert(C.TZ):%Y-%m-%d %H:%M}")
 
@@ -65,6 +80,10 @@ def main():
     # 2. Features + raw prediction ---------------------------------------
     feat = build_features(hourly)
     tom = feat[feat["target_date"] == tomorrow].copy()
+    missing_wx = int(tom["temp_c"].isna().sum()) if "temp_c" in tom else len(tom)
+    if missing_wx > 2:
+        raise SystemExit(f"Weather forecast missing for {missing_wx} of tomorrow's hours; "
+                         "nothing was saved. A later run will try again.")
     # If an input is unavailable (e.g. only one weather model answered, so there is
     # no model-disagreement column), forecast with it blank rather than crash; the
     # model handles blanks, and the log records what was missing.

@@ -454,6 +454,14 @@ def page_track_record():
             st.caption(f"Scoring {'all forecasts' if pick_v == 'All versions' else pick_v}"
                        f"{'' if pick_v == 'All versions' else f', in use since {first:%B %-d}'}. "
                        "Each version is scored only on days it actually forecast.")
+    if log is not None and not log.empty and (~log["model_version"].astype(str).str.startswith(
+            ("v4", "v5", "v6", "v7", "v8", "v9"))).any():
+        st.caption("Note on fairness: forecasts made before v4 (through Nov 2026) used the newest "
+                   "weather forecast available when the daily job ran, which was usually the "
+                   "afternoon before, a few hours after ISO-NE's 10 AM day-ahead deadline. "
+                   "Those comparisons favour our model (in a backtest, by about 0.4 percentage "
+                   "points of hourly error). From v4 on, the weather used is limited to what was "
+                   "published by 10 AM the day before, whenever the job runs.")
     scored = log[log[TARGET].notna()] if log is not None else pd.DataFrame()
     if scored.empty:
         msg = "No scored days yet. Each forecast is checked against actual demand the day after it covers."
@@ -856,7 +864,7 @@ st.sidebar.radio("Planning risk: how often the actual peak may go above the plan
                  list(RISK_LEVELS), index=1, key="risk")
 st.sidebar.markdown("**🟢 Live data, updated automatically every morning**")
 st.sidebar.caption(
-    "Each morning (10:30 AM ET in winter, 11:30 AM in summer), an automated job pulls the latest grid data from the "
+    "Each day from late morning ET (GitHub often starts it later), an automated job pulls the latest grid data from the "
     "U.S. Energy Information Administration and weather forecasts from Open-Meteo, issues "
     "a new forecast, and refreshes this app. No manual updates.")
 for line in data_freshness():

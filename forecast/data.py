@@ -150,8 +150,10 @@ def _coord_params():
     }
 
 
-def _date_chunks(start, end, months=3):
-    """Split a long date range so each request stays a reasonable size."""
+def _date_chunks(start, end, months=1):
+    """Split a long date range so each request stays a reasonable size. One month
+    per request: 3-month requests for 8 cities timed out on Open-Meteo's side
+    ("timeoutReached", Nov 9, 2026)."""
     s, e = pd.Timestamp(start), pd.Timestamp(end)
     while s <= e:
         chunk_end = min(s + pd.DateOffset(months=months) - pd.Timedelta(days=1), e)
@@ -225,7 +227,7 @@ def pull_weather_history(start, end, mode="forecast", models=None):
                 f"Archived day-ahead weather forecasts start {C.PREVIOUS_RUNS_START}; "
                 "use mode='archive' for earlier years (and label results accordingly)."
             )
-        url, suffix = OM_PREVIOUS_RUNS_URL, "_previous_day1"
+        url, suffix = OM_PREVIOUS_RUNS_URL, C.WEATHER_LEAD
     elif mode == "archive":
         url, suffix = OM_ARCHIVE_URL, ""
     else:
@@ -244,22 +246,35 @@ def pull_weather_history(start, end, mode="forecast", models=None):
     return _pull_history_one(url, suffix, start, end)
 
 
-def _pull_live_one(past_days, forecast_days, model=None):
+def _pull_live_one(past_days, forecast_days, model=None, lead=None):
+    """lead=None: the newest forecast run (how models before v4 were run live).
+    Otherwise: live weather from the SAME stored forecasts the model was trained on
+    (C.WEATHER_LEAD), not the newest run. So the live forecast uses only weather
+    known by 10 AM the day before, whatever time GitHub actually runs the job
+    (runs have started anywhere from 10 AM to 6 PM)."""
+    if lead is None:
+        params = {**_coord_params(), "hourly": ",".join(C.WEATHER_VARS),
+                  "past_days": past_days, "forecast_days": forecast_days}
+        if model:
+            params["models"] = model
+        return _weighted_frame(_get(OM_FORECAST_URL, params))
+    today = pd.Timestamp.now(tz="UTC").normalize()
     params = {
         **_coord_params(),
-        "hourly": ",".join(C.WEATHER_VARS),
-        "past_days": past_days, "forecast_days": forecast_days,
+        "hourly": ",".join(v + lead for v in C.WEATHER_VARS),
+        "start_date": (today - pd.Timedelta(days=past_days)).strftime("%Y-%m-%d"),
+        "end_date": (today + pd.Timedelta(days=forecast_days - 1)).strftime("%Y-%m-%d"),
     }
     if model:
         params["models"] = model
-    return _weighted_frame(_get(OM_FORECAST_URL, params))
+    return _weighted_frame(_get(OM_PREVIOUS_RUNS_URL, params), lead)
 
 
-def pull_weather_live(past_days=8, forecast_days=3, models=None):
+def pull_weather_live(past_days=8, forecast_days=3, models=None, lead=None):
     """Current forecast run(s), for the operational (tomorrow) forecast. Uses the
     same model set the deployed model was trained on."""
     if models:
-        frames, used = _try_models(lambda m: _pull_live_one(past_days, forecast_days, m), models)
+        frames, used = _try_models(lambda m: _pull_live_one(past_days, forecast_days, m, lead), models)
         if frames:
             if len(used) < len(models):
                 print(f"  WARNING: live blend uses {len(used)} of {len(models)} weather models")
@@ -267,8 +282,33 @@ def pull_weather_live(past_days=8, forecast_days=3, models=None):
             wx.attrs["models_used"] = used
             return wx
         print("  WARNING: no blended model succeeded; using the default single model")
-    wx = _pull_live_one(past_days, forecast_days)
+    wx = _pull_live_one(past_days, forecast_days, lead=lead)
     wx.attrs["models_used"] = ["default"]
+    return wx
+
+
+def pull_fresh_weather(target_date):
+    """Tomorrow's weather from this morning's runs (see C.FRESH_RUNS). Returns a
+    blended frame for the target day's hours, or None if no run is available."""
+    run_day = pd.Timestamp(target_date) - pd.Timedelta(days=1)
+    frames, used = [], []
+    for model, run_h in C.FRESH_RUNS.items():
+        try:
+            payload = _get(C.SINGLE_RUNS_URL, {**_coord_params(), "hourly": ",".join(C.WEATHER_VARS),
+                                               "models": model, "forecast_days": 3,
+                                               "run": f"{run_day:%Y-%m-%d}T{run_h:02d}:00"}, retries=3)
+        except Exception as e:
+            print(f"  fresh weather: {model} {run_h:02d}z not available ({str(e)[:80]})")
+            continue
+        f = _weighted_frame(payload)
+        f = f[f.index.tz_convert(C.TZ).tz_localize(None).normalize() == pd.Timestamp(target_date)]
+        if f["temp_c"].notna().sum() >= 20:
+            frames.append(f)
+            used.append(f"{model} {run_h:02d}z")
+    if not frames:
+        return None
+    wx = blend_models(frames) if len(frames) > 1 else frames[0]
+    wx.attrs["models_used"] = used
     return wx
 
 
