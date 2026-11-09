@@ -327,28 +327,53 @@ FULL_LEGEND = [("Actual", INK, "line"), ("Our forecast", OURS, "line"),
 # Pages
 # ---------------------------------------------------------------------------
 def page_tomorrow():
-    lf = load("latest_forecast.csv")
-    if lf is None or lf.empty:
-        st.title("Tomorrow's forecast")
+    """Today's and tomorrow's forecasts side by side (as tabs). Today's was issued
+    yesterday morning; tomorrow's is issued late this morning, because it uses
+    this morning's demand. Both come from the forecast log, so nothing is ever
+    shown as 'tomorrow' that isn't."""
+    log = load("forecast_log.csv")
+    if log is None or log.empty:
+        st.title("Today and tomorrow")
         st.info("No forecast has been issued yet. Run `python forecast_tomorrow.py`, "
                 "or open the repo's Actions tab and run **Daily day-ahead forecast**.")
         return
-    # Say so plainly if the daily job didn't run, instead of passing off an old
-    # forecast as tomorrow's. Between midnight and the morning run, the newest
-    # forecast is for today, which is expected, not a missed update: only warn
-    # once the day's last back-up slot (about 8 PM ET) has passed without a run.
-    fc_day = pd.Timestamp(lf["target_date"].iloc[0]).date()
     now_et = pd.Timestamp.now(tz=TZ)
-    today_et = now_et.date()
-    if fc_day < today_et or (fc_day == today_et and now_et.hour >= 20):
-        st.warning(f"This forecast is for {fc_day:%B %-d}, so it is out of date: today's automatic "
-                   "update hasn't run yet or failed. It will refresh on the next successful run.")
-    elif fc_day == today_et:
-        st.caption(f"Showing today's forecast. Tomorrow's is issued late each morning "
-                   "(around 10:30-11:30 AM ET).")
+    today = pd.Timestamp(now_et.date())
+    tomorrow = today + pd.Timedelta(days=1)
+
+    def day_frame(day):
+        d = log[log["target_date"] == day]
+        if d.empty:
+            return None
+        d = d[d["issued_at"] == d["issued_at"].max()]   # latest issue for that day
+        return d.sort_values("period_utc").reset_index(drop=True)
+
+    today_lf, tomorrow_lf = day_frame(today), day_frame(tomorrow)
+    st.title("Today and tomorrow")
+    tabs = st.tabs([f"Today, {today:%a %b %-d}", f"Tomorrow, {tomorrow:%a %b %-d}"])
+    with tabs[0]:
+        if today_lf is None:
+            st.warning(f"No forecast was issued for {today:%B %-d}: yesterday's automatic "
+                       "update didn't run.")
+        else:
+            _render_forecast(today_lf, show_actual=True)
+    with tabs[1]:
+        if tomorrow_lf is not None:
+            _render_forecast(tomorrow_lf)
+        elif now_et.hour >= 20:
+            st.warning(f"Tomorrow's forecast ({tomorrow:%B %-d}) should have been issued today "
+                       "but the automatic update hasn't run. It will appear after the next "
+                       "successful run.")
+        else:
+            st.info(f"Tomorrow's forecast ({tomorrow:%B %-d}) is issued late this morning, around "
+                    "10:30-11:30 AM ET, as soon as this morning's grid demand is in. "
+                    "Today's forecast is in the first tab.")
+
+
+def _render_forecast(lf, show_actual=False):
     peak = lf.loc[lf["pred"].idxmax()]
     t = peak["time"]
-    st.title(f"{t:%A, %B %-d}: New England demand peaks near "
+    st.subheader(f"{t:%A, %B %-d}: New England demand peaks near "
              f"{peak['pred']:,.0f} MW around {t:%-I %p}")
     issued = pd.Timestamp(lf["issued_at"].iloc[0])
     risk_label = st.session_state.get("risk", "1 day in 20")
@@ -371,7 +396,7 @@ def page_tomorrow():
         y=alt.Y("plan:Q", scale=alt.Scale(zero=False)))
     plan_text = alt.Chart(plan_df).mark_text(align="left", dx=4, dy=-8, color=PEAK, fontSize=12).encode(
         y="plan:Q", x=alt.value(0), text="label:N")
-    chart = (forecast_chart(lf, show_iso=show_iso) + plan_rule + plan_text
+    chart = (forecast_chart(lf, show_actual=show_actual, show_iso=show_iso) + plan_rule + plan_text
              + peak_pt.mark_point(color=PEAK, size=120, filled=True)
              + peak_pt.mark_text(dy=20, color=OURS, fontWeight="bold", fontSize=13).encode(
                  text=alt.value(f"Expected peak {peak['pred']:,.0f} MW")))
@@ -803,7 +828,7 @@ comparison with the grid operator possible.
 
 # ---------------------------------------------------------------------------
 PAGES = {
-    "Tomorrow's forecast": page_tomorrow,
+    "Today & tomorrow": page_tomorrow,
     "Live track record": page_track_record,
     "Accuracy": page_accuracy,
     "What drives demand": page_drivers,
