@@ -4,10 +4,12 @@ name: Fair weather test
 on:
   push:
     branches: [fair-weather-test]
+permissions:
+  contents: write
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 340
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -24,8 +26,17 @@ jobs:
         env:
           EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
         run: set -o pipefail; python forecast_tomorrow.py 2>&1 | tee live_log.txt
+      - name: Keep the v4 model on this branch (not main)
+        run: |
+          git config user.name "forecast-bot"
+          git config user.email "forecast-bot@users.noreply.github.com"
+          git add data/dayahead models/dayahead
+          git commit -m "v4 model and backtest (weather fixed by 10 AM the day before) [skip ci]" || true
+          git pull --rebase && git push
       - name: Pre-registered improvement tests
         if: success()
+        env:
+          SKIP_A: "1"
         run: set -o pipefail; python experiments/fair_improvements.py 2>&1 | tee experiments_log.txt
       - if: always()
         uses: actions/upload-artifact@v4

@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -115,7 +116,7 @@ def fresh_weather(hourly, start, end):
             continue
         used[name] = f"{model_id} {run_h:02d}z"
         print(f"  {name}: using {model_id}, {run_h:02d} UTC run, {len(days)} days...", flush=True)
-        for d in days:
+        def one(d):
             run_day = d - pd.Timedelta(days=1)       # issued on D for target D+1
             try:
                 payload = _get(SINGLE_RUNS_URL, {**_coord_params(), "hourly": ",".join(C.WEATHER_VARS),
@@ -123,12 +124,15 @@ def fresh_weather(hourly, start, end):
                                                  "run": f"{run_day:%Y-%m-%d}T{run_h:02d}:00",
                                                  "forecast_days": 3}, retries=3)
             except Exception as e:
-                print(f"    {d.date()}: failed ({str(e)[:60]})")
-                continue
+                print(f"    {d.date()}: failed ({str(e)[:60]})", flush=True)
+                return None
             f = _weighted_frame(payload)
             loc = f.index.tz_convert(C.TZ)
-            frames.append(f[loc.tz_localize(None).normalize() == d])
-            time.sleep(0.5)
+            return f[loc.tz_localize(None).normalize() == d]
+        # several days at a time: one by one took 2.5 hours per model (Nov 9 run)
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            frames = [f for f in ex.map(one, days) if f is not None]
+        print(f"    got {len(frames)}/{len(days)} days", flush=True)
         if frames:
             per_model.append(pd.concat(frames))
     if not per_model:
@@ -148,23 +152,28 @@ def main():
     last = modeling_rows(build_features(hourly))["target_date"].max()
     results = {}
 
-    print("TEST A: morning-demand cutoff 8 AM vs 6 AM (two years)")
-    years = {"Earlier year": (last - pd.Timedelta(days=729), last - pd.Timedelta(days=365)),
-             "Recent year": (last - pd.Timedelta(days=364), last)}
-    passed = True
-    for name, (s, e) in years.items():
-        a = score(backtest(hourly, s, e, cutoff=7))
-        b = score(backtest(hourly, s, e, cutoff=9))
-        ok, m, n = verdict(a, b)
-        passed &= ok
-        results[f"A {name}"] = {"baseline": fmt(a), "candidate": fmt(b), "blocks_won": f"{m}/{n}",
-                                "pass": bool(ok)}
-        print(f"  {name}: baseline {a['hourly']:.3f}% / peak {a['peak']:.3f}% | candidate "
-              f"{b['hourly']:.3f}% / peak {b['peak']:.3f}% | ISO {a['iso_hourly']:.3f}% / peak "
-              f"{a['iso_peak']:.3f}% | won {m}/{n} -> {'PASS' if ok else 'FAIL'}", flush=True)
-    results["A verdict"] = "PASS" if passed else "FAIL"
-    print(f"TEST A VERDICT: {results['A verdict']}\n")
-    json.dump(results, open(OUT, "w"), indent=2)
+    if os.environ.get("SKIP_A"):
+        print("TEST A: already run (FAIL on Nov 9: earlier year won only 5/14 blocks); skipped")
+        results["A verdict"] = "FAIL (Nov 9 run)"
+        years = {}
+    else:
+        print("TEST A: morning-demand cutoff 8 AM vs 6 AM (two years)")
+        years = {"Earlier year": (last - pd.Timedelta(days=729), last - pd.Timedelta(days=365)),
+                 "Recent year": (last - pd.Timedelta(days=364), last)}
+        passed = True
+        for name, (s, e) in years.items():
+            a = score(backtest(hourly, s, e, cutoff=7))
+            b = score(backtest(hourly, s, e, cutoff=9))
+            ok, m, n = verdict(a, b)
+            passed &= ok
+            results[f"A {name}"] = {"baseline": fmt(a), "candidate": fmt(b), "blocks_won": f"{m}/{n}",
+                                    "pass": bool(ok)}
+            print(f"  {name}: baseline {a['hourly']:.3f}% / peak {a['peak']:.3f}% | candidate "
+                  f"{b['hourly']:.3f}% / peak {b['peak']:.3f}% | ISO {a['iso_hourly']:.3f}% / peak "
+                  f"{a['iso_peak']:.3f}% | won {m}/{n} -> {'PASS' if ok else 'FAIL'}", flush=True)
+        results["A verdict"] = "PASS" if passed else "FAIL"
+        print(f"TEST A VERDICT: {results['A verdict']}\n")
+        json.dump(results, open(OUT, "w"), indent=2)
 
     print("TEST B: freshest weather allowed (April 2026 onward)")
     s, e = pd.Timestamp("2026-04-05"), last
