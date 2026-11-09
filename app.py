@@ -365,8 +365,9 @@ def page_tomorrow():
                        "but the automatic update hasn't run. It will appear after the next "
                        "successful run.")
         else:
-            st.info(f"Tomorrow's forecast ({tomorrow:%B %-d}) is issued late this morning, around "
-                    "10:30-11:30 AM ET, as soon as this morning's grid demand is in. "
+            st.info(f"Tomorrow's forecast ({tomorrow:%A, %B %-d}) comes out later today "
+                    f"({today:%A, %B %-d}). The automatic run is scheduled from 10:41 AM ET, but "
+                    "GitHub often starts it later, so it usually appears by mid-afternoon. "
                     "Today's forecast is in the first tab.")
 
 
