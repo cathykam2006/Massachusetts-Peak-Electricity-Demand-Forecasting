@@ -453,6 +453,13 @@ def page_track_record():
             st.caption(f"Scoring {'all forecasts' if pick_v == 'All versions' else pick_v}"
                        f"{'' if pick_v == 'All versions' else f', in use since {first:%B %-d}'}. "
                        "Each version is scored only on days it actually forecast.")
+    if log is not None and not log.empty and (~log["model_version"].astype(str).str.startswith(
+            ("v4", "v5", "v6", "v7", "v8", "v9"))).any():
+        st.caption("Note on fairness: forecasts made before v4 (through Nov 2026) used the newest "
+                   "weather forecast available when the daily job ran, which was usually the "
+                   "afternoon before, a few hours after ISO-NE's 10 AM day-ahead deadline. "
+                   "Those comparisons may slightly favour our model. From v4 on, the weather "
+                   "used is fixed to what was known by 10 AM, whenever the job runs.")
     scored = log[log[TARGET].notna()] if log is not None else pd.DataFrame()
     if scored.empty:
         msg = "No scored days yet. Each forecast is checked against actual demand the day after it covers."
