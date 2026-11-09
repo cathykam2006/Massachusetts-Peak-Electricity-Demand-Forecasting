@@ -150,8 +150,10 @@ def _coord_params():
     }
 
 
-def _date_chunks(start, end, months=3):
-    """Split a long date range so each request stays a reasonable size."""
+def _date_chunks(start, end, months=1):
+    """Split a long date range so each request stays a reasonable size. One month
+    per request: 3-month requests for 8 cities timed out on Open-Meteo's side
+    ("timeoutReached", Nov 9, 2026)."""
     s, e = pd.Timestamp(start), pd.Timestamp(end)
     while s <= e:
         chunk_end = min(s + pd.DateOffset(months=months) - pd.Timedelta(days=1), e)

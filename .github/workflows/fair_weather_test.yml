@@ -7,7 +7,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 340
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -19,17 +19,21 @@ jobs:
       - name: Retrain and backtest
         env:
           EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
-        run: python train_dayahead.py --full-refresh 2>&1 | tee train_log.txt
+        run: set -o pipefail; python train_dayahead.py --full-refresh 2>&1 | tee train_log.txt
       - name: Live forecast with the new model
         env:
           EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
-        run: python forecast_tomorrow.py 2>&1 | tee live_log.txt
+        run: set -o pipefail; python forecast_tomorrow.py 2>&1 | tee live_log.txt
+      - name: Pre-registered improvement tests
+        if: success()
+        run: set -o pipefail; python experiments/fair_improvements.py 2>&1 | tee experiments_log.txt
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: fair-weather-results
           path: |
             *_log.txt
+            experiment_results.json
             old_backtest.csv
             old_metrics.csv
             data/dayahead/backtest.csv
