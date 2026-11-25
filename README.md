@@ -2,7 +2,7 @@
 
 An operational forecast of tomorrow's hourly electricity demand on the ISO New England grid, built only from free public data. Every morning it predicts all 24 hours of the next day with an 80% prediction range, recommends a plan-for peak with a risk-calibrated buffer, and scores itself against ISO-NE's own day-ahead forecast.
 
-🔗 **Live app:** [Open the interactive app](https://massachusetts-peak-electricity-demand-forecasting-jlapsnfvdheu.streamlit.app/)
+🔗 **Live app:** [Open the interactive app](https://cathykam2006.github.io/Massachusetts-Peak-Electricity-Demand-Forecasting/) (runs in your browser and is always on; the first load takes a few seconds)
 
 ## Why it matters
 
