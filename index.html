@@ -42,7 +42,8 @@
     mount(
       {
         entrypoint: "app.py",
-        requirements: ["pandas", "numpy"],
+        // tzdata: Pyodide has no time zone database by default, and the app uses America/New_York
+        requirements: ["pandas", "numpy", "tzdata"],
         files,
         // Same theme as .streamlit/config.toml on main
         streamlitConfig: {
