@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+  <title>New England Day-Ahead Demand Forecast | Cathy Kam</title>
+  <meta name="description" content="Day-ahead hourly electricity demand forecast for New England (ISO-NE), updated every morning. Built by Cathy Kam." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.3/build/stlite.css" />
+</head>
+<body>
+  <div id="root"></div>
+  <noscript>This app runs Python in your browser, so it needs JavaScript turned on.</noscript>
+  <script type="module">
+    import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.3/build/stlite.js";
+
+    // The app and its data come straight from the main branch, so this page always
+    // shows the latest forecast committed by the daily GitHub Action. Nothing here
+    // needs to be redeployed when the app or the data change.
+    const RAW = "https://raw.githubusercontent.com/cathykam2006/Massachusetts-Peak-Electricity-Demand-Forecasting/main/";
+
+    // Every file app.py reads. A file missing from main would stop the page from
+    // loading, so only list files that the repo always contains.
+    const DATA_FILES = [
+      "latest_forecast.csv",
+      "forecast_log.csv",
+      "backtest.csv",
+      "backtest_summary.json",
+      "metrics.csv",
+      "season_metrics.csv",
+      "shap_values.npy",
+      "shap_features.csv",
+      "shap_agreement.txt",
+      "supply.csv",
+    ];
+
+    const files = { "app.py": { url: RAW + "app.py" } };
+    for (const name of DATA_FILES) {
+      files[`data/dayahead/${name}`] = { url: `${RAW}data/dayahead/${name}` };
+    }
+
+    mount(
+      {
+        entrypoint: "app.py",
+        requirements: ["pandas", "numpy"],
+        files,
+        // Same theme as .streamlit/config.toml on main
+        streamlitConfig: {
+          "theme.base": "light",
+          "theme.primaryColor": "#11698E",
+          "theme.backgroundColor": "#FFFFFF",
+          "theme.secondaryBackgroundColor": "#EEF2F5",
+          "theme.textColor": "#1E2B3A",
+          "theme.font": "sans serif",
+          "client.toolbarMode": "viewer",
+        },
+      },
+      document.getElementById("root"),
+    );
+  </script>
+</body>
+</html>
