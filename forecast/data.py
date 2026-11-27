@@ -76,7 +76,9 @@ def pull_eia_series(series_type, start, end, api_key):
             "sort[0][column]": "period", "sort[0][direction]": "asc",
             "offset": offset, "length": 5000,
         }
-        batch = _get(EIA_REGION_URL, params)["response"]["data"]
+        # EIA's gateway sometimes returns HTTP 504 for several minutes at a time
+        # (Nov 26, 2026), so give it more tries: the waits add up to ~10 minutes.
+        batch = _get(EIA_REGION_URL, params, retries=7)["response"]["data"]
         records.extend(batch)
         if len(batch) < 5000:
             break

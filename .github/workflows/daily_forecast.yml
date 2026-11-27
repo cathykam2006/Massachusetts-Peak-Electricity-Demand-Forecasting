@@ -6,9 +6,13 @@ on:
   # GitHub starts scheduled jobs hours late or drops them altogether (Nov 3 and
   # Nov 4 never started). So there is a slot every hour from late morning to
   # evening ET: the first one GitHub actually runs issues the forecast, and the
-  # rest see it is already published and stop within seconds.
+  # rest see it is already published and stop within seconds. The evening slots
+  # (0-3 UTC) give a second chance when the EIA API is down during the day
+  # (Nov 26 failed with repeated HTTP 504s and no later slot ran). They stop at
+  # 3:41 UTC so the "tomorrow" date is still the same day in New York.
   schedule:
     - cron: "41 15-23 * * *"   # 10:41 AM - 6:41 PM EST / 11:41 AM - 7:41 PM EDT
+    - cron: "41 0-3 * * *"     # 7:41 - 10:41 PM EST / 8:41 - 11:41 PM EDT
   workflow_dispatch:         # lets you run it manually from the Actions tab
 
 permissions:
